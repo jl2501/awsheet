@@ -37,12 +37,13 @@ class SecurityGroupHelper(AWSHelper):
         self.heet = heet
         self.base_name = base_name
         self.description = description
-        self.name = self.build_name()
+        self.aws_name = self.build_aws_name(self.base_name)
         self.region = self.heet.get_region()
         self.vpc_id = self.heet.get_value('vpc_id', required=True)
+        self._resource_object = None
 
         #- these are actually dependent on the above working
-        self.tag = self.build_tag()
+        self.heet_id_tag = self.build_heet_id_tag()
 
         self.conn = boto.ec2.connect_to_region(
             self.region,
@@ -53,10 +54,15 @@ class SecurityGroupHelper(AWSHelper):
         #- we have to check that group exists
         #- so, when we do that check, we cache the resulting objects
         #- here. Saves extra calls to the API, which can be throttled.
-        self.src_group_references = {}
+        self.src_group_references = dict()
 
         self.rules = set()
-        #- this will actually make API calls if there is a reference to another group
+
+        #- this is where we put the rules that refer to other AWSHeet SGs that are also declared
+        #- in this same module. Dict Key for each is the rule's src_group attribute
+        self.dependent_rules = dict()
+
+        #- this will actually make API calls unless there is a reference to another group
         if rules is not None:
             for rule in rules:
                 self.add_rule(rule)
@@ -65,30 +71,39 @@ class SecurityGroupHelper(AWSHelper):
         #- Post Init Hook
         self.post_init_hook()
 
-        # this will call "this".converge()
+        #- add ourselves to the heet dict so we are reachable by an '@' reference
+        heet.add_resource_ref(self, self.base_name_to_ref(self.base_name))
+
+        # this will callback the new instance's securitygrouphelper.converge()
         heet.add_resource(self)
 
 
 
 
     def __str__(self):
-        return "SecurityGroup %s" % self.name
+        return "SecurityGroup %s" % self.aws_name
 
 
 
     def normalize_aws_sg_rules(self, aws_sg):
         """AWS has grants and rules, but we work with them as a logical unit.
         The rules have the ip_protocol, from_port, to_port while the grants have the remaining parameters,
-        which are the mutually exclusive group_id or cidr_ip parameters"""
+        which are the mutually exclusive group_id or cidr_ip parameters
+        Also normalize sg-ids that are references to 'self'"""
 
-        normalized_rules = []
+        boto_self = self.get_resource_object()
+        normalized_rules = set()
         if aws_sg is not None:
             for rule in aws_sg.rules:
                 for grant in rule.grants:
-                    rule = SecurityGroupRule(rule.ip_protocol, rule.from_port, rule.to_port, grant.cidr_ip, grant.group_id)
+                    normalized_group_id = grant.group_id
+                    if grant.group_id is not None and grant.group_id == boto_self.id:
+                        self.heet.logger.debug('Normalizing security group ID reference to self')
+                        normalized_group_id = 'self'
+                    rule = SecurityGroupRule(rule.ip_protocol, rule.from_port, rule.to_port, grant.cidr_ip, normalized_group_id)
                     #- be sure that we are always comparing similarly normalized rules 
                     #- apply self.normalize_rule to API returned rules as well
-                    normalized_rules.append(self.normalize_rule(rule))
+                    normalized_rules.add(self.normalize_rule(rule))
                 
             return normalized_rules
 
@@ -96,7 +111,12 @@ class SecurityGroupHelper(AWSHelper):
 
     def get_resource_object(self):
         """Get the Boto Version of this security group from EC2 via API"""
-        (tag_name, tag_value) = self.tag
+        #- check it we have it already
+        if self._resource_object is not None:
+            return self._resource_object
+
+        #- build the tag and find it by tag
+        (tag_name, tag_value) = self.heet_id_tag
         groups = self.conn.get_all_security_groups(filters={'tag-key' : tag_name, 'tag-value' :tag_value})
 
         if groups:
@@ -104,20 +124,26 @@ class SecurityGroupHelper(AWSHelper):
             #- this is worthy of logging an error as it isn't expected
             if len(groups) > 1:
                 self.heet.logger.warn("multiple security groups returned!: search tag:[{}: {}]".format(tag_name, tag_value))
-            return groups[0]
+
+            #- save it for next call
+            self._resource_object = groups[0]
+            return self._resource_object
 
         else:
+            #- it doesn't exist yet
             return None
+
+
 
     def rule_fails_check(self, rule):
         """Checks that the rule has all the needed attributes
         Returns a list of strings with error messages for each test the rule failed.
-        If it passes, the list is empty."""
+        If it passes, then the list will be empty."""
 
         #- a list of all the ways that the rule has failed
         rule_status = []
 
-        if rule.ip_protocol not in ['tcp','udp', 'icmp', '-1']:
+        if str(rule.ip_protocol) not in ['tcp','udp', 'icmp', '-1']:
             rule_status.append('bad value for ip_protocol in rule {}'.format(str(rule)))
 
         #- try to convert to float to check if it is a valid port number
@@ -125,7 +151,6 @@ class SecurityGroupHelper(AWSHelper):
             if rule.from_port < 0 and rule.from_port != -1:
                 rule_status.append('rule from_port is a negative number that is not -1')
                 raise TypeError()
-
             float(rule.from_port)
 
         except TypeError as err:
@@ -146,6 +171,7 @@ class SecurityGroupHelper(AWSHelper):
             else:
                 rule_status.append('rule to port is not a valid integer')
 
+        #- Check the (.cidr_ip, .src_group) pair compliance
         #- need to have exactly one of src_group, cidr_ip
         if rule.cidr_ip is not None:
             if rule.src_group is not None:
@@ -158,29 +184,47 @@ class SecurityGroupHelper(AWSHelper):
                 except ValueError as err:
                     rule_status.append('rule has an invalid cidr_ip value')
 
-        elif rule.src_group is None:
+        elif rule.cidr_ip is None and rule.src_group is None:
             rule_status.append('Must specify one or other of [cidr_ip, src_group]')
                
         else:
-            #- get the boto object for the reference security group so we
-            #- can pass that object into boto's authorize() method
-            src_group_resource = self.conn.get_all_security_groups(group_ids=rule.src_group)
-            if len(src_group_resource) <= 0:
-                rule_status.append('References another security group ID [{}] that doesn\'t exist'.format(rule.src_group))
-            else:
-                self.heet.logger.debug('added src_group_references[{}]'.format(rule.src_group))
-                self.src_group_references[rule.src_group] = src_group_resource[0]
+            #- if its a self reference, it will skip all this and pass
+            if rule.src_group != 'self' and not self.rule_has_dependent_reference(rule):
+                #- get the boto object for the reference security group so we
+                #- can pass that object into boto's authorize() method
+                src_group_resource = self.conn.get_all_security_groups(group_ids=rule.src_group)
+                if len(src_group_resource) <= 0:
+                    rule_status.append('References another security group ID [{}] that doesn\'t exist'.format(rule.src_group))
+                else:
+                    self.heet.logger.debug('added src_group_references[{}]'.format(rule.src_group))
+                    self.src_group_references[rule.src_group] = src_group_resource[0]
+            elif self.rule_has_dependent_reference(rule):
+                #- this is a reference to another heet security group helper object
+                #- we should make sure that this actually exists before saying its okay
+                #- but we can only do that after we have a comprehensive list of all the
+                #- security groups to be created, which we will only have at the end of the
+                #- program.
+                #- So here, we add this name to a list of things which will be done at exit.
+                self.heet.add_dependent_resource(self, rule.src_group)
 
         return rule_status
+
 
 
     def normalize_rule(self, rule):
         """Normalize attributes that can have multiple values representing the same thing into one well-defined value
         Currently only checks from_port and to_port for '-1' or None and normalizes them to be None as that's what the API returns"""
         new_rule = rule
+
+        if rule.ip_protocol == -1:
+            self.heet.logger.debug('Normalizing ip_protocol on rule: {}'.format(rule))
+            new_rule = SecurityGroupRule('-1', rule.from_port, rule.to_port, rule.cidr_ip, rule.src_group)
+
         #- we check for None explicitly also to short-circuit else the int() will fail w/ TypeError and we want it to pass
         if rule.from_port is None or rule.to_port is None or int(rule.from_port) == -1 or int(rule.to_port) == -1:
-            new_rule = SecurityGroupRule(ip_protocol=rule.ip_protocol, from_port=None, to_port=None, cidr_ip=rule.cidr_ip, src_group=rule.src_group)
+            self.heet.logger.debug('Normalizing port range on rule: {}'.format(rule))
+            new_rule = SecurityGroupRule(new_rule.ip_protocol, None, None, new_rule.cidr_ip, new_rule.src_group)
+
         return new_rule
 
 
@@ -199,14 +243,14 @@ class SecurityGroupHelper(AWSHelper):
 
 
 
-    def build_tag(self):
+    def build_heet_id_tag(self):
         """The tag is what defines a security group as a unique component of heet code
         This format has the following consequences:
             * you can change the id of a security group and still converge
             * you can not converge across projects, environments or sgs with different names, or different VPCs
             * you can change the rules of an SG and converge"""
 
-        sg_tag = SgTag(self.heet.get_environment(), self.heet.base_name, self.vpc_id, self.name)
+        sg_tag = SgTag(self.heet.get_environment(), self.heet.base_name, self.vpc_id, self.aws_name)
         tag_value = ':'.join(sg_tag)
         tag_name = 'heet_id'
 
@@ -214,58 +258,94 @@ class SecurityGroupHelper(AWSHelper):
 
 
 
-    def build_name(self):
-        """The name of the security group is basically the concatenated in order, minus the vpc id
+    def build_aws_name(self, base_name):
+        """The name of the security group is basically the Tag concatenated in order, minus the vpc id
         NB: AWS only determines SG uniqueness by (VPC_ID, SG Name), so if you want the same code for different environments,
         you have to add some additional environment-specific info to the name"""
-        return '-'.join([self.heet.get_environment(), self.heet.base_name, self.base_name])
+        return '-'.join([self.heet.get_environment(), self.heet.base_name, base_name])
+
+
+
+    def rule_has_dependent_reference(self, rule):
+        """Check if the rule refers to a security group that is another Heet object
+        For now, we do that by passing in the heet base_name of the group prefixed with an '@'"""
+        return (rule.src_group[0] == '@')
+
+
+
+    def base_name_to_ref(self, base_name):
+        """Converts the Heet Script's SG base name into a name reference.
+        Currently, this just means that it is prepended with an '@'"""
+        return '@' + base_name
+
+
+
+    def ref_to_base_name(self,base_name):
+        """The opposite of the above."""
+        if base_name[0] == '@':
+            return base_name[1:]
+        else:
+            self.heet.logger.error("Trying to dereference a SG name that isn't a reference: {}".format(base_name))
+            return None
 
 
 
     def converge(self):
         """Adds missing rules, revokes extra rules, creates entire group if necessary"""
+        self.heet.logger.info("converging security group: %s" % self.aws_name)
 
-        self.heet.logger.info("converging security group: %s" % self.name)
+        boto_sg = self.get_resource_object()
+        if boto_sg is None:
+            self.heet.logger.debug("creating new group: %s" % self.aws_name)
+            boto_sg = self.conn.create_security_group(self.aws_name, self.description, self.vpc_id)
+            #- add it so it can be used later for rules that reference self
 
-        remote_sg = self.get_resource_object()
-        if remote_sg is None:
-            self.heet.logger.debug("creating new group: %s" % self.name)
-            remote_sg = self.conn.create_security_group(self.name, self.description, self.vpc_id)
-            (tag_name,tag_value) = self.tag
-            remote_sg.add_tag(key=tag_name, value=tag_value)
+            (tag_name,tag_value) = self.heet_id_tag
+            boto_sg.add_tag(key=tag_name, value=tag_value)
             remote_rules = set()
-
         else:
-            self.heet.logger.debug("Using pre-existing group: %s" % self.name)
-            remote_rules = set(self.normalize_aws_sg_rules(remote_sg))
+            self.heet.logger.debug("Using pre-existing group: %s" % self.aws_name)
+            remote_rules = set(self.normalize_aws_sg_rules(boto_sg))
+
+        self.src_group_references['self'] = boto_sg
 
         if self.rules:
             desired_rules = set(self.rules)
         else:
             desired_rules = set()
 
+        #print "DEBUG : remote rules: {}".format(remote_rules)
+        #print "DEBUG : desired rules: {}".format(desired_rules)
+
         for rule in desired_rules:
             #- if it isn't there, add it
             if rule in remote_rules:
                 self.heet.logger.info("Already Authorized: %s on %s" % (rule, self))
             else:
-                self.heet.logger.info("Adding Authorization: %s on %s" % (rule, self))
-                #- use the src_group object we already got when we checked the rule
                 if rule.src_group:
-                    remote_sg.authorize(rule.ip_protocol,rule.from_port, rule.to_port,rule.cidr_ip, self.src_group_references[rule.src_group])
+                    #- check if this rule can be converged now or later
+                    if self.rule_has_dependent_reference(rule):
+                        self.heet.logger.debug("-- Rule refers to another Heet group. Will converge_dependency() atexit: {}".format(rule))
+                        self.dependent_rules[rule.src_group] = rule
+                    else:
+                        #- use the src_group object we already got when we checked the rule
+                        self.heet.logger.info("Adding Authorization: %s on %s" % (rule, self))
+                        boto_sg.authorize(rule.ip_protocol,rule.from_port, rule.to_port,rule.cidr_ip, self.src_group_references[rule.src_group])
                 else:
-                    remote_sg.authorize(rule.ip_protocol,rule.from_port, rule.to_port,rule.cidr_ip)
-
+                    boto_sg.authorize(rule.ip_protocol,rule.from_port, rule.to_port,rule.cidr_ip)
 
         #- remove all the rules that we didn't explicitly declare we want in this group
         for rule in remote_rules:
             if rule not in desired_rules:
                 self.heet.logger.info("Removing remote rule not declared locally: {} in {}".format(rule, self))
 
-                #- boto-specific: get the referring security group object to delete this rule
+                #- boto-specific: get the referring security group boto-level object to delete this rule
                 ref_sg = None
                 if rule.src_group is not None:
-                    ref_sg = self.conn.get_all_security_groups(group_ids=rule.src_group)
+                    if rule.src_group == 'self':
+                        ref_sg = [self.get_resource_object()]
+                    else:
+                        ref_sg = self.conn.get_all_security_groups(group_ids=rule.src_group)
                     if len(ref_sg) >= 1:
                         ref_sg = ref_sg[0]
                     else:
@@ -273,10 +353,29 @@ class SecurityGroupHelper(AWSHelper):
                         self.heet.logger.error("Rule to delete references another Security Group that no longer exists. Will fail...")
                         pass
 
-                remote_sg.revoke(rule.ip_protocol, rule.from_port, rule.to_port, rule.cidr_ip, ref_sg)
-
+                boto_sg.revoke(rule.ip_protocol, rule.from_port, rule.to_port, rule.cidr_ip, ref_sg)
         #- Post Converge Hook
         self.post_converge_hook()
+
+
+
+    def converge_dependency(self, name):
+        """This is where we converge the rules that refer to other security groups that are declared in the same AWSHeet module
+        Dependencies here is any security group rule that referenced another Heet group that is being declared in this script.
+        If it is the first time the group is created, the referenced group will not exist yet, and so the rule will fail convergence.
+        So, to keep it simple, any group that refers to another group in a Heet script will be put off to be converged after we are 
+        sure that the creation of the rule should not fail unless there has been an actual error."""
+
+        boto_sg = self.get_resource_object()
+
+        #- get the security ID for the group we need, fill in as the rule.src_group
+        #- then authorize the rule with that AWS ID
+        init_rule = self.dependent_rules[name]
+
+        #- grab the group we need from the resource references
+        boto_src_group = self.heet.resource_refs[name].get_resource_object()
+        final_rule = SecurityGroupRule(init_rule.ip_protocol, init_rule.from_port, init_rule.to_port, init_rule.cidr_ip, boto_src_group)
+        boto_sg.authorize(final_rule.ip_protocol, final_rule.from_port, final_rule.to_port, final_rule.cidr_ip, final_rule.src_group)
 
 
 
@@ -286,12 +385,12 @@ class SecurityGroupHelper(AWSHelper):
 
         #- Pre Destroy Hook
         self.pre_destoy_hook()
-        self.heet.logger.info("deleting SecurityGroup record %s" % (self.name))
+        self.heet.logger.info("deleting SecurityGroup record %s" % (self.aws_name))
         while True:
             try:
-                self.conn.delete_security_group(name=self.name)
+                self.conn.delete_security_group(name=self.aws_name)
                 return
             except:
                 # instances may still be using this group
-                self.heet.logger.debug("unable to delete %s just yet. will try again..." % (self.name))
+                self.heet.logger.debug("unable to delete %s just yet. will try again..." % (self.aws_name))
                 time.sleep(3)
