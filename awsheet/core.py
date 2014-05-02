@@ -8,6 +8,7 @@ import atexit
 import boto
 import boto.ec2
 import boto.ec2.elb
+import collections
 
 class AWSHeet:
 
@@ -33,21 +34,17 @@ class AWSHeet:
             self.base_name = name
 
         self.load_creds()
-        #- If a resource type needs some events to occur before it can fully converge then it is
-        #- said to have a dependent convergence process and must converge in 2 phases.
-        #- It implements the second phase of convergence by declaring itself as a dependent resource
-        #- to heet, and heet will register that resources converge_dependencies() method to run
-        #- at program exit. This dict keeps track of those resources. 
-        #- Keys are chosen by the resources that request to add things to this dict
-        self.dependent_resources = dict()
 
-        #- with this resources are more than a flat list 
-        #- resources can be named for later reference
-        #- this is used to refer to other resources
-        #- for resources that have requested this behavior 
-        #- by calling AWSHeet.add_dependent_resource() 
-        #- (which adds them to the dependent_resources dict)
+        #- resource reference table - this is used to refer to other resources by '@-name'
         self.resource_refs = dict()
+
+        #- If a resource needs some events to occur before it can fully converge then 
+        #- it must converge in 2 phases.
+        #- In the second phase the resource can assume the resource reference table is complete
+
+        #- It implements the second phase of convergence by declaring itself as a dependent resource
+        #- Heet will register that resources converge_dependency() method to run at exit
+        self.dependent_resources = dict()
 
         atexit.register(self._finalize)
 
@@ -83,6 +80,16 @@ class AWSHeet:
 
 
 
+    def is_resource_ref(self, ref_str):
+        """Tests if ref_str is in a format that can be considered a resource reference
+        Currently this format is not yet enforced anywhere."""
+        if isinstance(ref_str, collections.Sequence) and ref_str[0] == '@':
+            return True
+        else:
+            return False
+
+
+
     def add_resource_ref(self, resource, resource_ref_key):
         """Adds a resource to a dictionary so it can be referred to by a name / key
         Essentially the resource list, but without ordering constraints and with a requirement
@@ -93,7 +100,6 @@ class AWSHeet:
 
     def add_resource(self, resource):
         """Adds resources to a list and calls that resource's converge method"""
-        #- TODO add_resource_ref(resource, some_default_key)
         self.resources.append(resource)
         if not self.args.destroy:
             resource.converge()
@@ -104,10 +110,13 @@ class AWSHeet:
     def add_dependent_resource(self, dependent_resource, key_name):
         """Adds resources to a list and registers that resource's converge_dependency() method
         to be called at program exit and passes it the resource_name that it passed us.
-        This is used when a resource does not have all of the references it needs at first converge.
-        Current example is a security group that has a rule that references another security group which has
-        not been declared yet."""
+        When a resource calls this, it also passes in a tag, used internally as a dict key, so that
+        if a resource makes multiple calls to this, they can associate a string with each dependent
+        event that they need to handle when the resource's converge_dependency() method is called back
         self.dependent_resources[key_name] = dependent_resource
+        at program exit. 
+
+        Callbacks and tags are issued at exit in LIFO order."""
         atexit.register(dependent_resource.converge_dependency, key_name)
         return
 
