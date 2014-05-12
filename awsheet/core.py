@@ -136,7 +136,7 @@ class AWSHeet:
             exit(1)
         for resource in reversed(self.resources):
             resource.destroy()
-        self.logger.info("all AWS resources in [ %s / %s ] are destroyed" % (self.base_name, self.get_environment()))
+        self.logger.info("all AWS resources in [ %s / %s ] have had destroy() called" % (self.base_name, self.get_environment()))
 
 
 
