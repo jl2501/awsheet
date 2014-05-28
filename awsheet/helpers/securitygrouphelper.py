@@ -87,6 +87,7 @@ class SecurityGroupHelper(AWSHelper):
                 self.add_rule(rule)
 
 
+        self.heet.logger.debug('^^^ SGH init: [{}]'.format(self.base_name))
         #- Post Init Hook
         self.post_init_hook()
 
@@ -116,7 +117,7 @@ class SecurityGroupHelper(AWSHelper):
         Also normalize sg-ids that are references to 'self'
         and convert the security group IDs to resource references for SGs in this module"""
 
-        boto_self = self.get_resource_object()
+        boto_self = self.get_or_create_resource_object()
         normalized_rules = set()
         if aws_sg is not None:
             for rule in aws_sg.rules:
@@ -139,25 +140,39 @@ class SecurityGroupHelper(AWSHelper):
 
 
     def get_resource_object(self):
-        """Get the Boto Version of this security group from EC2 via API"""
+        """Get or create the Boto Version of this security group from EC2 via API"""
 
         #- build the tag and find it by tag
         (tag_name, tag_value) = self.heet_id_tag
-        groups = self.conn.get_all_security_groups(filters={'tag-key' : tag_name, 'tag-value' :tag_value})
+        matching_groups = self.conn.get_all_security_groups(filters={'tag-key' : tag_name, 'tag-value' :tag_value})
 
-        if groups:
+        boto_group = None
+        if matching_groups:
             #- if there's more than one security group in the same project and environment with the same name,
             #- this is worthy of logging an error as it isn't expected
-            if len(groups) > 1:
+            if len(matching_groups) > 1:
                 self.heet.logger.warn("multiple security groups returned!: search tag:[{}: {}]".format(tag_name, tag_value))
+            boto_group = matching_groups[0]
+        return boto_group
 
-            #- save it for next call
-            self._resource_object = groups[0]
-            return self._resource_object
 
-        else:
+
+    def get_or_create_resource_object(self):
+        """Get or create the Boto Version of this security group from EC2 via API"""
+
+        (tag_name, tag_value) = self.heet_id_tag
+        boto_group = self.get_resource_object()
+        if not boto_group:
             #- it doesn't exist yet
-            return None
+            try:
+                boto_group = self.conn.create_security_group(name=self.aws_name, description=self.description, vpc_id=self.vpc_id)
+                boto_group.add_tag(key=tag_name, value=tag_value)
+            except boto.exception.EC2ResponseError as err:
+                print 'AWS EC2 API error: {}'.format(err.message)
+                return None
+
+        return boto_group
+
 
 
 
@@ -208,27 +223,36 @@ class SecurityGroupHelper(AWSHelper):
         #- Check the (.cidr_ip, .src_group) pair compliance
         #- need to have exactly one of src_group, cidr_ip
         if rule.cidr_ip is not None:
+            self.heet.logger.debug(' ^^^ rule has cidr_ip')
             if rule.src_group is not None:
+                self.heet.logger.debug(' ^^^ rule has both cidr_ip and src_group')
                 rule_status.append('Can\'t have both cidr_ip and src_group set simultaneously: rule {}'.format(str(rule)))
 
             else:
+                self.heet.logger.debug(' ^^^ rule has only cidr_ip')
                 #- test the cidr_ip
                 try:
                     ipaddress.IPv4Network(unicode(rule.cidr_ip))
                 except ValueError as err:
+                    self.heet.logger.debug(' ^^^ rule has invalid cidr_ip')
                     rule_status.append('rule has an invalid cidr_ip value')
 
         elif rule.cidr_ip is None and rule.src_group is None:
+            self.heet.logger.debug(' ^^^ rule has neither cidr_ip nor src_group')
             rule_status.append('Must specify one or other of [cidr_ip, src_group]')
                
         else:
-            #- if its a self reference, it will skip all this and pass
-            if rule.src_group != 'self' and not self.rule_has_dependent_reference(rule):
-                #- this is a reference to another AWS group explicitly
+            if rule.src_group == 'self':
+                self.heet.logger.debug(' ^^^ rule src_group refers to "self"')
+                boto_self = self.get_or_create_resource_object()
+                self.src_group_references[boto_self.id] = boto_self
+            elif rule.src_group != 'self' and not self.rule_has_dependent_reference(rule):
+                self.heet.logger.debug('^^^ rule that references AWS SG directly: {}'.format(rule.src_group))
                 #- get the boto object for the reference security group so we
                 #- can pass that object into boto's authorize() method
                 src_group_resource = self.conn.get_all_security_groups(group_ids=rule.src_group)
                 if len(src_group_resource) <= 0:
+                    self.heet.logger.debug('^^^ rule references another security group ID [{}] that doesn\'t exist'.format(rule.src_group))
                     rule_status.append('References another security group ID [{}] that doesn\'t exist'.format(rule.src_group))
                 else:
                     self.heet.logger.debug('added src_group_references[{}]'.format(rule.src_group))
@@ -240,6 +264,7 @@ class SecurityGroupHelper(AWSHelper):
                 #- security groups to be created, which we will only have at the end of the
                 #- program.
                 #- So here, we add this name to a list of things which will be done at exit.
+                self.heet.logger.debug('^^^ rule seems to be a new style resource reference.')
                 key = self.make_key_from_rule(rule)
                 self.heet.add_dependent_resource(self, key)
                 self.dependent_rules[key] = rule
@@ -274,9 +299,7 @@ class SecurityGroupHelper(AWSHelper):
         #- just go through and normalize all the values one by one and make a new rule at the end
         #- out of all the stuff we collect throughout the normalization tests
         if new_rule['src_group'] == 'self':
-            boto_self = self.get_resource_object()
-            if boto_self:
-                new_rule['src_group'] = boto_self.id
+            new_rule['src_group'] = self.get_or_create_resource_object().id
 
         if self.heet.is_resource_ref(new_rule['src_group']):
             try:
@@ -437,7 +460,7 @@ class SecurityGroupHelper(AWSHelper):
                 ref_sg = None
                 if rule.src_group is not None:
                     if rule.src_group == 'self':
-                        ref_sg = [self.get_resource_object()]
+                        ref_sg = [self.get_or_create_resource_object()]
                     elif self.is_aws_reference(rule.src_group):
                         ref_sg = self.conn.get_all_security_groups(group_ids=rule.src_group)
                         if len(ref_sg) >= 1:
@@ -469,19 +492,19 @@ class SecurityGroupHelper(AWSHelper):
         if self.heet.args.destroy:
             return
 
-        #print ""
+        print ""
         print "----CONVERGE_DEPENDENCY() {}: {}---- {} of {} rules to process".format(self.base_name, name, self._num_converged_dependencies+1, len(self.dependent_rules))
         #print ""
         self._num_converged_dependencies += 1
 
-        boto_self = self.get_resource_object()
+        boto_self_sg = self.get_or_create_resource_object()
 
         #- lookup the rule as it was when we saved it
         init_rule = self.dependent_rules[name]
 
         #- grab the group we need from the resource references
         resource_name = name.split('/')[-1]
-        boto_src_group = self.heet.resource_refs[resource_name].get_resource_object()
+        boto_src_group = self.heet.resource_refs[resource_name].get_or_create_resource_object()
 
         #- TODO: clean this up
         #- we need the ID for comparisons, but we need the object for the API call
@@ -527,11 +550,8 @@ class SecurityGroupHelper(AWSHelper):
 
 
     def destroy(self):
-        """Attempt to remove the security group. There are several modes of operation:
-        rm_group is True: we will attempt to remove all the rules and then delete the group
-        rm_instances: we will attempt to terminate all the instances in the group (will not delete the group unless rm_group)
-        rm_eni: we will attempt to delete all the ENIs and then delete the group (will not delete the group unless rm_group)"""
         boto_self = self.get_resource_object()
+
         if not boto_self:
             return
 
@@ -539,58 +559,29 @@ class SecurityGroupHelper(AWSHelper):
         self.pre_destroy_hook()
 
         self.heet.logger.info("deleting SecurityGroup record %s" % (self.aws_name))
-        if self.delete_modes.rm_instances:
-            #- delete the instances first
-            for instance in boto_self.instances():
-                try:
-                    instance.terminate()
-                    time.sleep(0.10)
-                except Exception as err:
-                    self.heet.logger.info('Failed to terminate instance {}'.format(instance.id))
-                    self.heet.logger.debug("    error message is: {}".format(err.message))
-        
-        if self.delete_modes.rm_enis:
-            #- delete the elastic network interfaces
+        #- first delete any src_group rules so the group can be deleted
+        for boto_rule in boto_self.rules:
+            for boto_grant in boto_rule.grants:
+                #print " *** DEBUG: boto_rule: boto_grant :: [{}] : [{}]".format(boto_rule, boto_grant)
+                if boto_grant.group_id is not None:
+                    try:
+                        src_group_ref = self.conn.get_all_security_groups(group_ids=[boto_grant.group_id])[0]
+                        self.heet.logger.debug('Removing rule with src_group to remove group.({}:{})'.format(boto_grant.group_id, src_group_ref.name))
+                        boto_self.revoke(boto_rule.ip_protocol, boto_rule.from_port, boto_rule.to_port, boto_grant.cidr_ip, src_group_ref)
+                    except boto.exception.EC2ResponseError as err:
+                        self.heet.logger.debug('Failed to remove rule: [{}]'.format(err.message))
+                    except KeyError as err:
+                        print "FAILED KEY IN SRC_GROUP_REFERENCES: {}".format(boto_grant.group_id)
+                        print " CURRENT SRC_GROUP_REFERENCES:"
+                        print "        {}".format(self.src_group_references)
+                        print " ------XXX------ "
 
-            #- get all the elastic network interfaces in this sg
-            eni_filter = {'group-id' : boto_self.id}
-            enis = self.conn.get_all_network_interfaces(filters=eni_filter)
-
-            for eni_x in enis:
-                try:
-                    eni_x.delete()
-                    time.sleep(0.10)
-                except Exception as err:
-                    self.heet.logger.info("Failed to delete network interface: {}".format(eni_x.id))
-                    self.heet.logger.debug("    error message is: {}".format(err.message))
-
-        #- normal delete attempt
         try:
-            #- first remove all the rules
-            remote_rules = self.normalize_aws_sg_rules(boto_self)
-            print "                     ----------------------------------- "
-            print "                    |                                   |"
-            print "                    |              debug_start          |"
-            print "                    |                                   |"
-            print "                     ----------------------------------- "
-            print "{} REMOTE RULES:".format(self.base_name)
-            for rule in remote_rules:
-                print rule
-            for rule_x in remote_rules:
-                print "DEBUG: REMOVING RULE_X: {}".format(str(rule_x))
-                if rule_x.src_group is not None:
-                    boto_src = self.conn.get_all_security_groups(group_ids=[rule_x.src_group])[0]
-                else:
-                    boto_src = rule_x.src_group
-
-                boto_self.revoke(rule_x.ip_protocol, rule_x.from_port, rule_x.to_port, rule_x.cidr_ip, boto_src)
-
             boto_self.delete()
-
+            self.heet.logger.info('Successfully deleted group {}.'.format(self.aws_name))
         except boto.exception.EC2ResponseError as err:
-            self.heet.logger.info("Failed to delete security group: {}".format(boto_self.id))
-            self.heet.logger.debug("    error message is: {}".format(err.message))
+            # 
+            self.heet.logger.info("*** Unable to delete {}. {}".format(self.aws_name, err.message))
+            time.sleep(3)
 
         return
-
-#- EOF
