@@ -17,6 +17,9 @@ import collections
 import ipaddress
 import boto.exception
 
+#- used to wait between successive API calls
+AWS_API_COOLDOWN_PERIOD = 1.0
+
 #TODO: IMPLEMENT TAGGING
 
 #- no need for a full class. These are simple tuples
@@ -60,6 +63,7 @@ class SecurityGroupHelper(AWSHelper):
         #- helps to know how many we have done, how many left
         self._num_converged_dependencies = 0
 
+        self.heet.logger.debug('^^^ SGH init: [{}]'.format(self.base_name))
         #- these are actually dependent on the above working
         self.heet_id_tag = self.build_heet_id_tag()
 
@@ -87,7 +91,6 @@ class SecurityGroupHelper(AWSHelper):
                 self.add_rule(rule)
 
 
-        self.heet.logger.debug('^^^ SGH init: [{}]'.format(self.base_name))
         #- Post Init Hook
         self.post_init_hook()
 
@@ -142,17 +145,18 @@ class SecurityGroupHelper(AWSHelper):
     def get_resource_object(self):
         """Get or create the Boto Version of this security group from EC2 via API"""
 
+        boto_group = None
         #- build the tag and find it by tag
         (tag_name, tag_value) = self.heet_id_tag
         matching_groups = self.conn.get_all_security_groups(filters={'tag-key' : tag_name, 'tag-value' :tag_value})
 
-        boto_group = None
         if matching_groups:
             #- if there's more than one security group in the same project and environment with the same name,
             #- this is worthy of logging an error as it isn't expected
             if len(matching_groups) > 1:
                 self.heet.logger.warn("multiple security groups returned!: search tag:[{}: {}]".format(tag_name, tag_value))
             boto_group = matching_groups[0]
+
         return boto_group
 
 
@@ -166,6 +170,7 @@ class SecurityGroupHelper(AWSHelper):
             #- it doesn't exist yet
             try:
                 boto_group = self.conn.create_security_group(name=self.aws_name, description=self.description, vpc_id=self.vpc_id)
+                time.sleep(AWS_API_COOLDOWN_PERIOD)
                 boto_group.add_tag(key=tag_name, value=tag_value)
             except boto.exception.EC2ResponseError as err:
                 print 'AWS EC2 API error: {}'.format(err.message)
@@ -306,10 +311,14 @@ class SecurityGroupHelper(AWSHelper):
                 #- try to look it up
                 self.heet.logger.debug('Normalizing resource_reference: {}'.format(rule.src_group))
                 boto_sg = self.heet.resource_refs[new_rule['src_group']].get_resource_object()
+                self.heet.logger.debug('*** found resource_reference: {}'.format(rule.src_group))
+                self.heet.logger.debug('*** adding local resource_reference: {}'.format(rule.src_group))
+                self.src_group_references[boto_sg.id] = boto_sg
                 if boto_sg:
                     new_rule['src_group'] = boto_sg.id
 
             except KeyError as err:
+                self.heet.logger.debug('*** resource_reference not found: {}'.format(rule.src_group))
                 #- it wasn't in the reference table yet, 
                 #- we'll handle this in converge() and converge_dependency() 
                 pass
@@ -410,7 +419,7 @@ class SecurityGroupHelper(AWSHelper):
             self.heet.logger.debug("Creating new group: %s" % self.aws_name)
             boto_self = self.conn.create_security_group(self.aws_name, self.description, self.vpc_id)
             #- wait for API consistency - sleep momentarily before adding tag
-            time.sleep(0.25)
+            time.sleep(AWS_API_COOLDOWN_PERIOD)
             (tag_name,tag_value) = self.heet_id_tag
             boto_self.add_tag(key=tag_name, value=tag_value)
             remote_rules = set()
@@ -444,7 +453,17 @@ class SecurityGroupHelper(AWSHelper):
                     elif self.is_aws_reference(rule.src_group):
                         #- use the src_group object we already got when we checked the rule
                         self.heet.logger.info("Adding Authorization: %s on %s" % (rule, self))
-                        boto_self.authorize(rule.ip_protocol,rule.from_port, rule.to_port,rule.cidr_ip, self.src_group_references[rule.src_group])
+                        try:
+                            boto_self.authorize(rule.ip_protocol,rule.from_port, rule.to_port,rule.cidr_ip, self.src_group_references[rule.src_group])
+                        except KeyError as err:
+                            print ""
+                            print ""
+                            print 'FATAL ERROR: key error in src_group_references. looked for [{}] in:'.format(rule.src_group)
+                            print self.src_group_references
+                            print ""
+                            print ""
+                            os._exit(-1)
+
                     else:
                         print "Unexpected Rule format: {}".format(rule)
                         raise AttributeError('Source Group reference can NOT be converged')
@@ -543,7 +562,7 @@ class SecurityGroupHelper(AWSHelper):
         #    print " _______________________________________________________________________________"
         #    print "|_______________________________________________________________________________|"
             boto_self.authorize(final_rule.ip_protocol, final_rule.from_port, final_rule.to_port, final_rule.cidr_ip, final_rule.src_group)
-            time.sleep(0.25)
+            time.sleep(AWS_API_COOLDOWN_PERIOD)
 
         #-TODO: go through and revoke extra rules
 
