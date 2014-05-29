@@ -108,11 +108,6 @@ class SecurityGroupHelper(AWSHelper):
 
 
 
-    def post_converge_hook(self):
-        print "----POST CONVERGE HOOK----"
-
-
-
     def normalize_aws_sg_rules(self, aws_sg):
         """AWS has grants and rules, but we work with them as a logical unit.
         The rules have the ip_protocol, from_port, to_port while the grants have the remaining parameters,
@@ -120,7 +115,7 @@ class SecurityGroupHelper(AWSHelper):
         Also normalize sg-ids that are references to 'self'
         and convert the security group IDs to resource references for SGs in this module"""
 
-        boto_self = self.get_or_create_resource_object()
+        boto_self = self.get_resource_object()
         normalized_rules = set()
         if aws_sg is not None:
             for rule in aws_sg.rules:
@@ -128,9 +123,9 @@ class SecurityGroupHelper(AWSHelper):
                     #- group-based rules are special as they may represent 'self'
                     normalized_group_id = grant.group_id
                     #- check for self
-                    if grant.group_id is not None and grant.group_id == boto_self.id:
-                        self.heet.logger.debug('Normalizing security group ID reference to self')
-                        normalized_group_id = 'self'
+                    #if grant.group_id is not None and grant.group_id == boto_self.id:
+                    #    self.heet.logger.debug('Normalizing security group ID reference to self')
+                    #    normalized_group_id = 'self'
 
                     rule = SecurityGroupRule(rule.ip_protocol, rule.from_port, rule.to_port, grant.cidr_ip, normalized_group_id)
 
@@ -169,11 +164,15 @@ class SecurityGroupHelper(AWSHelper):
         if not boto_group:
             #- it doesn't exist yet
             try:
+                self.heet.logger.debug('get_or_create_resource_object: creating new security group')
                 boto_group = self.conn.create_security_group(name=self.aws_name, description=self.description, vpc_id=self.vpc_id)
+                self.heet.logger.debug('get_or_create_resource_object: successfully created new security group, waiting to tag')
                 time.sleep(AWS_API_COOLDOWN_PERIOD)
+                self.heet.logger.debug('get_or_create_resource_object: tagging new security group: [{}:{}]'.format(tag_name, tag_value))
                 boto_group.add_tag(key=tag_name, value=tag_value)
+                self.heet.logger.debug('get_or_create_resource_object: successfully created new tagged group.')
             except boto.exception.EC2ResponseError as err:
-                print 'AWS EC2 API error: {}'.format(err.message)
+                print 'AWS EC2 API error: {} ({})'.format(err.message, err)
                 return None
 
         return boto_group
@@ -289,6 +288,40 @@ class SecurityGroupHelper(AWSHelper):
         return is_ref
 
 
+    def get_boto_src_group(self, src_group):
+        """src_group can be:
+        * @resource-reference
+        * 'sg-xxxxxxx'
+
+        Return a boto object that can be used in authorize / revoke"""
+        boto_sg = None
+        if self.heet.is_resource_ref(src_group):
+            self.heet.logger.debug('get_boto_src_group: will try to look [{}] up as heet resource ref'.format(src_group))
+            try:
+                rr = self.heet.resource_refs[src_group]
+                boto_sg = rr.get_resource_object()
+            except KeyError as err:
+                self.heet.logger.debug('get_boto_src_group: failed to lookup [{}] in heet resource refs table'.format(src_group))
+                boto_sg = None
+        elif self.is_aws_reference(src_group):
+            self.heet.logger.debug('get_boto_src_group: will try to retrieve sg id [{}] from AWS API'.format(src_group))
+            #XXX we should actually get it by tag
+            # move create tag to be a utility function
+            #(tag_name, tag_value) = self.heet_id_tag
+            #matching_groups = self.conn.get_all_security_groups(filters={'tag-key' : tag_name, 'tag-value' :tag_value})
+            matching_groups = self.conn.get_all_security_groups(group_ids=[src_group])
+            if not matching_groups:
+                self.heet.logger.debug('get_boto_src_group: aws returned no groups with tag ([{}],[{}])'.format(tag_name, tag_value))
+                boto_sg = None
+            else:
+                boto_sg = matching_groups[0]
+        else:
+            self.heet.logger.debug('get_boto_src_group: can not tell what type of src_group format this is: [{}]'.format(src_group))
+            boto_sg = None
+
+        return boto_sg
+
+
 
     def normalize_rule(self, rule):
         """Normalize SecurityGroupRule attributes that can have multiple values representing the same thing into one well-defined value
@@ -304,32 +337,36 @@ class SecurityGroupHelper(AWSHelper):
         #- just go through and normalize all the values one by one and make a new rule at the end
         #- out of all the stuff we collect throughout the normalization tests
         if new_rule['src_group'] == 'self':
+            #- add_rules is called from init, so we may not exist: call get_or_create.
             new_rule['src_group'] = self.get_or_create_resource_object().id
 
         if self.heet.is_resource_ref(new_rule['src_group']):
             try:
                 #- try to look it up
                 self.heet.logger.debug('Normalizing resource_reference: {}'.format(rule.src_group))
-                boto_sg = self.heet.resource_refs[new_rule['src_group']].get_resource_object()
-                self.heet.logger.debug('*** found resource_reference: {}'.format(rule.src_group))
-                self.heet.logger.debug('*** adding local resource_reference: {}'.format(rule.src_group))
-                self.src_group_references[boto_sg.id] = boto_sg
+                #boto_sg = self.heet.resource_refs[new_rule['src_group']].get_resource_object()
+                boto_sg = self.get_boto_src_group(rule.src_group)
                 if boto_sg:
+                    self.heet.logger.debug('*** resolved resource_reference: {}'.format(rule.src_group))
+                    self.heet.logger.debug('*** adding local resource_reference: {}'.format(rule.src_group))
+                    self.src_group_references[boto_sg.id] = boto_sg
                     new_rule['src_group'] = boto_sg.id
+                else:
+                    self.heet.logger.debug('normalize_rule: get_resource_object returned nothing for group: {}.'.format(rule.src_group))
 
             except KeyError as err:
-                self.heet.logger.debug('*** resource_reference not found: {}'.format(rule.src_group))
+                self.heet.logger.debug('*** normalize_rule: resource_reference not found: {}, will handle in 2nd pass'.format(rule.src_group))
                 #- it wasn't in the reference table yet, 
                 #- we'll handle this in converge() and converge_dependency() 
                 pass
 
         if rule.ip_protocol == -1:
-            self.heet.logger.debug('Normalizing ip_protocol: {}'.format(rule.ip_protocol))
+            self.heet.logger.debug('Normalizing ip_protocol: {} to str(-1)'.format(rule.ip_protocol))
             new_rule['ip_protocol'] = '-1'
 
         #- we check for None explicitly also to short-circuit else the int() will fail w/ TypeError and we want it to pass
         if new_rule['from_port'] is None or new_rule['to_port'] is None or int(new_rule['from_port']) == -1 or int(new_rule['to_port']) == -1:
-            self.heet.logger.debug('Normalizing port range: {} .. {}'.format(rule.from_port, rule.to_port))
+            self.heet.logger.debug('Normalizing port range: {} .. {} to [None .. None]'.format(rule.from_port, rule.to_port))
             new_rule['from_port'] = None
             new_rule['to_port'] = None
 
@@ -474,6 +511,19 @@ class SecurityGroupHelper(AWSHelper):
         for rule in remote_rules:
             if rule not in desired_rules:
                 self.heet.logger.info("Removing remote rule not declared locally: {} in {}".format(rule, self))
+                print ""
+                print ""
+                print "DEBUG: removing rule"
+                print "remote: "
+                print str(remote_rules)
+                print ""
+                print "current rule being tested: "
+                print str(rule)
+                print ""
+                print "desired rules: "
+                print str(desired_rules)
+                print ""
+                print ""
 
                 #- boto-specific: get the referring security group boto-level object to delete this rule
                 ref_sg = None
@@ -516,7 +566,7 @@ class SecurityGroupHelper(AWSHelper):
         #print ""
         self._num_converged_dependencies += 1
 
-        boto_self_sg = self.get_or_create_resource_object()
+        boto_self = self.get_resource_object()
 
         #- lookup the rule as it was when we saved it
         init_rule = self.dependent_rules[name]
