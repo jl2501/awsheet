@@ -120,13 +120,7 @@ class SecurityGroupHelper(AWSHelper):
         if aws_sg is not None:
             for rule in aws_sg.rules:
                 for grant in rule.grants:
-                    #- group-based rules are special as they may represent 'self'
                     normalized_group_id = grant.group_id
-                    #- check for self
-                    #if grant.group_id is not None and grant.group_id == boto_self.id:
-                    #    self.heet.logger.debug('Normalizing security group ID reference to self')
-                    #    normalized_group_id = 'self'
-
                     rule = SecurityGroupRule(rule.ip_protocol, rule.from_port, rule.to_port, grant.cidr_ip, normalized_group_id)
 
                     #- be sure that we are always comparing similarly normalized rules 
