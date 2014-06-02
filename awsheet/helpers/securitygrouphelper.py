@@ -164,15 +164,26 @@ class SecurityGroupHelper(AWSHelper):
             try:
                 self.heet.logger.debug('get_or_create_resource_object: creating new security group')
                 boto_group = self.conn.create_security_group(name=self.aws_name, description=self.description, vpc_id=self.vpc_id)
-                self.heet.logger.debug('get_or_create_resource_object: successfully created new security group, waiting to tag')
-                time.sleep(AWS_API_COOLDOWN_PERIOD)
-                self.heet.logger.debug('get_or_create_resource_object: tagging new security group: [{}:{}]'.format(tag_name, tag_value))
+            except boto.exception.EC2ResponseError as err:
+                print 'AWS EC2 API error: {} ({})'.format(err.message, err)
+                return None
+
+            self.heet.logger.debug('get_or_create_resource_object: successfully created new security group, waiting to tag')
+            time.sleep(AWS_API_COOLDOWN_PERIOD)
+            self.heet.logger.debug('get_or_create_resource_object: tagging new security group: [{}:{}]'.format(tag_name, tag_value))
+            try:
+                #- sometimes a short sleep isn't enough, and we really don't want to exit before tagging
+                #- as that makes the next convergence cycle fail until the group is deleted manually.
                 boto_group.add_tag(key=tag_name, value=tag_value)
                 self.heet.logger.debug('get_or_create_resource_object: successfully created new tagged group.')
                 self.aws_id = boto_group.id
             except boto.exception.EC2ResponseError as err:
-                print 'AWS EC2 API error: {} ({})'.format(err.message, err)
-                return None
+                if err.code == 'InvalidGroup.NotFound':
+                    self.heet.logger.debug('get_or_create_resource: setting ID tag failed. Waiting to try again...')
+                    time.sleep(3)
+                    boto_self.add_tag(key=tag_name, value=tag_value)
+                else:
+                    raise err
 
         return boto_group
 
@@ -468,11 +479,16 @@ class SecurityGroupHelper(AWSHelper):
         if boto_self is None:
             self.heet.logger.debug("Creating new group: %s" % self.aws_name)
             boto_self = self.conn.create_security_group(self.aws_name, self.description, self.vpc_id)
-            #- wait for API consistency - sleep momentarily before adding tag
-            time.sleep(AWS_API_COOLDOWN_PERIOD)
-            (tag_name,tag_value) = self.heet_id_tag
-            boto_self.add_tag(key=tag_name, value=tag_value)
             remote_rules = set()
+            (tag_name,tag_value) = self.heet_id_tag
+            try:
+                boto_self.add_tag(key=tag_name, value=tag_value)
+            except boto.exception.EC2ResponseError as err:
+                if err.code == 'InvalidGroup.NotFound':
+                    #- wait for API consistency - sleep momentarily before adding tag
+                    self.heet.logger.debug('converge: set_tag failed due to SG not found. Waiting a moment then trying again.')
+                    time.sleep(3)
+                    boto_self.add_tag(key=tag_name, value=tag_value)
         else:
             self.heet.logger.debug("Using pre-existing group: %s" % self.aws_name)
             remote_rules = set(self.normalize_aws_sg_rules(boto_self))
