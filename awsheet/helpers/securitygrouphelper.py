@@ -148,6 +148,7 @@ class SecurityGroupHelper(AWSHelper):
             if len(matching_groups) > 1:
                 self.heet.logger.warn("multiple security groups returned!: search tag:[{}: {}]".format(tag_name, tag_value))
             boto_group = matching_groups[0]
+            self.aws_id = boto_group.id
 
         return boto_group
 
@@ -656,39 +657,38 @@ class SecurityGroupHelper(AWSHelper):
         If it is the first time the group is created, the referenced group will not exist yet, and so the rule will fail convergence.
         So, to keep it simple, any group that refers to another group in a Heet script will be put off to be converged after we are 
         sure that the creation of the rule should not fail unless there has been an actual error."""
-        #- TODO: this should have a revoke cycle as well. rules that refer to other groups can't be verified until all we have resolved
-        #- all of the security group ids to resource references
-
-        if self.heet.args.destroy:
-            #- don't try to do anything if our goal is to delete everything
-            #- TODO: implement catching of security groups that couldn't be deleted on first try perhaps
-            return
-
         print ""
         print "----CONVERGE_DEPENDENCY() {}: {}---- {} of {} rules to process".format(self.base_name, key, self._num_converged_dependencies+1, len(self.dependent_rules))
         #print ""
         self._num_converged_dependencies += 1
 
         boto_self = self.get_resource_object()
+        if not boto_self:
+            self.heet.logger.debug('converge_dependency: no boto_object found. returning without issuing any API calls')
+            return
 
         #- lookup the rule as it was when we saved it
         init_rule = self.dependent_rules[key]
 
         #- grab the group we need from the resource references
         #resource_name = name.split('/')[-1]
-        src_group_name = self.get_src_group_from_key(key)
-        if self.heet.is_resource_ref(src_group_name):
-            #- a bit opaque, but resource references are only called for rules that are trying
-            #- to be added, so we know if we see a resource reference here that this rule was 
-            #- trying to be added and failed due to a resource reference being unable to be resolved
-            self.heet.logger.debug('converge_dependency: add_rule detected: [{}]'.format(init_rule))
-            self.converge_dependent_add_rule(init_rule)
-        elif self.is_aws_reference(src_group_name):
-            #- equally opaque, the only other rules we register to be called back for are rules
-            #- that existed remotely that referred to an AWS ID that we couldn't look up at the time
-            #- that we needed to check if it should be removed or not
-            self.heet.logger.debug('converge_dependency: remove_test detected: [{}]'.format(init_rule))
-            self.converge_dependent_remove_test(init_rule)
+        if key == 'DESTROY_AGAIN':
+            self.heet.logger.debug('converge_dependency: destroying 2nd round')
+            self.destroy()
+        else:
+            src_group_name = self.get_src_group_from_key(key)
+            if self.heet.is_resource_ref(src_group_name):
+                #- a bit opaque, but resource references are only called for rules that are trying
+                #- to be added, so we know if we see a resource reference here that this rule was 
+                #- trying to be added and failed due to a resource reference being unable to be resolved
+                self.heet.logger.debug('converge_dependency: add_rule detected: [{}]'.format(init_rule))
+                self.converge_dependent_add_rule(init_rule)
+            elif self.is_aws_reference(src_group_name):
+                #- equally opaque, the only other rules we register to be called back for are rules
+                #- that existed remotely that referred to an AWS ID that we couldn't look up at the time
+                #- that we needed to check if it should be removed or not
+                self.heet.logger.debug('converge_dependency: remove_test detected: [{}]'.format(init_rule))
+                self.converge_dependent_remove_test(init_rule)
         return
 
 
@@ -726,6 +726,11 @@ class SecurityGroupHelper(AWSHelper):
             boto_self.delete()
             self.heet.logger.info('Successfully deleted group {}.'.format(self.aws_name))
         except boto.exception.EC2ResponseError as err:
-            self.heet.logger.info("*** Unable to delete {}. {}".format(self.aws_name, err.message))
+            if 'DESTROY_AGAIN' in self.dependent_rules:
+                self.heet.logger.info("*** Unable to delete {}. {}".format(self.aws_name, err.message))
+            else:
+                #- try again after all the other groups rules are deleted
+                self.heet.add_dependent_resource(self, 'DESTROY_AGAIN')
+                self.dependent_rules['DESTROY_AGAIN'] = 'placeholder'
 
         return
