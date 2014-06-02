@@ -348,7 +348,7 @@ class SecurityGroupHelper(AWSHelper):
             #- normalize_rule called from add_rules which is called from init, so we may not exist: call get_or_create.
             boto_self = self.get_or_create_resource_object()
             if not boto_self:
-                return
+                return rule
 
             new_rule['src_group'] = boto_self.id
 
@@ -722,10 +722,10 @@ class SecurityGroupHelper(AWSHelper):
 
         self.heet.logger.debug('destroy [{}]: done removing rules.'.format(self.aws_name))
         try:
+            time.sleep(AWS_API_COOLDOWN_PERIOD)
             boto_self.delete()
             self.heet.logger.info('Successfully deleted group {}.'.format(self.aws_name))
         except boto.exception.EC2ResponseError as err:
             self.heet.logger.info("*** Unable to delete {}. {}".format(self.aws_name, err.message))
-            time.sleep(3)
 
         return
