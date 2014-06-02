@@ -289,7 +289,7 @@ class SecurityGroupHelper(AWSHelper):
         Just means the first three characters are 'sg-'"""
 
         is_ref = False
-        if src_group[0] == 's' and src_group[1] == 'g' and src_group[2] == '-' and len(src_group.split('-')) == 2:
+        if src_group and src_group[0] == 's' and src_group[1] == 'g' and src_group[2] == '-' and len(src_group.split('-')) == 2:
             is_ref = True
 
         return is_ref
@@ -321,6 +321,7 @@ class SecurityGroupHelper(AWSHelper):
                 self.heet.logger.debug('get_boto_src_group: aws returned no groups with tag ([{}],[{}])'.format(tag_name, tag_value))
                 boto_sg = None
             else:
+                self.heet.logger.debug('get_boto_src_group: aws returned matching group')
                 boto_sg = matching_groups[0]
         else:
             self.heet.logger.debug('get_boto_src_group: can not tell what type of src_group format this is: [{}]'.format(src_group))
@@ -567,7 +568,9 @@ class SecurityGroupHelper(AWSHelper):
                             else:
                                 self.heet.logger.error("Rule to delete references another Security Group that no longer exists. Will fail...")
                                 reg_sg = None
-                    if ref_sg is None:
+
+                    if rule.src_group is not None and ref_sg is None:
+                        #- if we didn't just find it, skip it for now
                         key = self.make_key_from_rule(rule)
                         if key not in self.dependent_rules:
                             self.dependent_rules[key] = rule
@@ -637,9 +640,9 @@ class SecurityGroupHelper(AWSHelper):
             desired_rules.add(self.normalize_rule(rule_x))
 
         if remote_rule not in desired_rules:
-            self.heet.logger.debug('converge_dependent_remove_test: removing rule [{}]'.format(init_rule))
-            boto_src_group = self.get_boto_src_group(remote_rule)
-            boto_self.revoke(rule.ip_protocol, rule.from_port, rule.to_port, rule.cidr_ip, boto_src_group)
+            self.heet.logger.debug('converge_dependent_remove_test: removing rule [{}]'.format(remote_rule))
+            boto_src_group = self.get_boto_src_group(remote_rule.src_group)
+            boto_self.revoke(remote_rule.ip_protocol, remote_rule.from_port, remote_rule.to_port, remote_rule.cidr_ip, boto_src_group)
         return
 
 
