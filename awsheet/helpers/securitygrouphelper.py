@@ -479,6 +479,7 @@ class SecurityGroupHelper(AWSHelper):
         if boto_self is None:
             self.heet.logger.debug("Creating new group: %s" % self.aws_name)
             boto_self = self.conn.create_security_group(self.aws_name, self.description, self.vpc_id)
+            self.aws_id = boto_self.id
             remote_rules = set()
             (tag_name,tag_value) = self.heet_id_tag
             try:
@@ -491,6 +492,7 @@ class SecurityGroupHelper(AWSHelper):
                     boto_self.add_tag(key=tag_name, value=tag_value)
         else:
             self.heet.logger.debug("Using pre-existing group: %s" % self.aws_name)
+            self.aws_id = boto_self.id
             remote_rules = set(self.normalize_aws_sg_rules(boto_self))
 
         self.src_group_references['self'] = boto_self
