@@ -429,7 +429,7 @@ class SecurityGroupHelper(AWSHelper):
 
         sg_tag = SgTag(self.heet.get_environment(), self.heet.base_name, self.vpc_id, self.aws_name)
         tag_value = ':'.join(sg_tag)
-        tag_name = 'heet_id'
+        tag_name = 'AWSHeet'
 
         return (tag_name, tag_value)
 
