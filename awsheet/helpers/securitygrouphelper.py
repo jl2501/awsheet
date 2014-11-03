@@ -428,7 +428,7 @@ class SecurityGroupHelper(AWSHelper):
             * you can change the rules of an SG and converge"""
 
         sg_tag = SgTag(self.heet.get_environment(), self.heet.base_name, self.vpc_id, self.aws_name)
-        tag_value = ':'.join(sg_tag)
+        tag_value = '/'.join(sg_tag)
         tag_name = 'AWSHeet'
 
         return (tag_name, tag_value)
