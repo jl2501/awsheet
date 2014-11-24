@@ -45,8 +45,7 @@ class GSLBHelper(AWSHelper):
         if isinstance(self.target, InstanceHelper):
             self.target = self.target.get_instance().ip_address
         healthcheck_id = self.create_health_check()
-        if not self.get_resource_object():
-            self.create_record(healthcheck_id)
+        self.create_record(healthcheck_id)
         return self
 
     def destroy(self):
@@ -87,7 +86,7 @@ class GSLBHelper(AWSHelper):
             "Comment": "creating DNS A record with a health check",
             "Changes": [
                 {
-                    "Action": "CREATE",
+                    "Action": "UPSERT",
                     "ResourceRecordSet": {
                         "Name": self.name,
                         "Type": "A",
@@ -102,6 +101,13 @@ class GSLBHelper(AWSHelper):
             }
         self.heet.logger.info("creating A record %s to %s for ttl=%s using healthcheck %s" % (self.name, self.target, self.ttl, healthcheck_id))
         self.change_resource_record_sets(change_request)
+
+    def get_caller_reference(self):
+        """Creating a route53 health check requires a caller reference id to
+        allow multiple idemptotent calls. If you delete the health check
+        manually, you'll never be able to recreate it with the same
+        reference."""
+        return "ref:%s-%s" % (self.name.rstrip('.'), self.target)
 
     def change_resource_record_sets(self, change_request):
         """executes change-resource-record-sets command with JSON argument"""
@@ -119,8 +125,8 @@ class GSLBHelper(AWSHelper):
 
     def create_health_check(self):
         """creates Route53 health check and returns healthcheck id"""
-        # TODO consider passing FullyQualifiedDomainName if http health check needs Host header
-        cmd = ['aws', 'route53', 'create-health-check', '--caller-reference', self.target, '--health-check-config', 'IPAddress=%s,Port=%s,Type=%s,ResourcePath=%s' % (self.target, self.healthcheck_port, 'HTTP', self.healthcheck_path)]
+        # passing in FullyQualifiedDomainName to help identify purpose of each health check, although it should probably be overridable as a param
+        cmd = ['aws', 'route53', 'create-health-check', '--caller-reference', self.get_caller_reference(), '--health-check-config', 'IPAddress=%s,Port=%s,Type=%s,ResourcePath=%s,FullyQualifiedDomainName=%s' % (self.target, self.healthcheck_port, 'HTTP', self.healthcheck_path, self.name.rstrip('.'))]
         output = self.heet.exec_awscli(cmd)
         var = json.loads(output)
         return var['HealthCheck']['Id']
