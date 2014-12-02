@@ -1,3 +1,44 @@
+"""This module implements the security group helper module for AWSHeet that is aimed at providing idempotent AWS EC2 security groups.
+Currently, it only supports Security Groups that are in a VPC.
+
+Rules are created using the SecurityGroupRule type and then they are collected together inside an iterable (usually a set is used).
+This collection of rules is then passed along to the SecurityGroupHelper constructor which is also passed a name and a description.
+
+Example 1 - give access to a specified list of IP addresses:
+    #create a new security group that gives access to the following ips to port 80
+    cidr_ips = ['192.168.0.1/32', '10.10.11.12/24', '155.246.0.0/16']
+    http_port = 80
+
+    rules_for_new_security_group = set()
+    for cidr_ip_x in cidr_ips:
+        rules_for_new_security_group.add(SecurityGroupRule(ip_protocol='tcp', from_port=http_port, to_port=http_port, cidr_ip=cidr_ip_x, src_group=None))
+
+    new_security_group = SecurityGroupHelper(name='New Test Group', description='just a simple example group', rules=rules_for_new_security_group)
+
+Example 2 - give two seperate security groups mutual access to SSH / port 22:
+    sg1_rules = set() #- the set of rules for the first security group
+    sg2_rules = set() #- the set of rules for the second security group
+
+
+    #- a shared rule based on IP address and ICMP
+    all_icmp = SecurityGroupRule(ip_protocol='icmp', from_port=-1, to_port=-1, cidr_ip='0.0.0.0/0', src_group=None)
+
+    sg1_rules.add(all_icmp)
+    sg2_rules.add(all_icmp)
+
+    #- use an '@' symbol in the src_group name to specify a group by name, even if the group doesn't exist yet
+    sg1_rules.add(SecurtyGroupRule(ip_protocol='tcp', from_port=22, to_port=22, cidr_ip=None, src_group='@securityGroup2'))
+    sg2_rules.add(SecurtyGroupRule(ip_protocol='tcp', from_port=22, to_port=22, cidr_ip=None, src_group='@securityGroup1'))
+
+    #- create the actual groups
+    sg1 = SecurityGroupHelper(name='securityGroup1', description='example group 1', rules=sg1_rules)
+    sg2 = SecurityGroupHelper(name='securityGroup2', description='example group 2', rules=sg2_rules)
+
+    #- program exits
+    #-    at program exit, the remaining dependencies will now be converged
+    #-    this is an easy way of forward referencing when you create the rules so that the referenced groups
+    #-    don't have to exist at that time, as long as they are created within the lifetime of the same program
+    """
 from .awshelper import AWSHelper
 import time
 import re
@@ -506,7 +547,8 @@ class SecurityGroupHelper(AWSHelper):
         for rule in desired_rules:
             #- if it isn't there, add it
             if rule in remote_rules:
-                self.heet.logger.info("Already Authorized: %s on %s" % (rule, self))
+                #- the rule we want to add is already there, so skip it
+                self.heet.logger.debug("Already Authorized: %s on %s" % (rule, self))
             else:
                 if rule.src_group:
                     #- check if this rule can be converged now or later
@@ -628,22 +670,7 @@ class SecurityGroupHelper(AWSHelper):
 
         remote_rules = self.normalize_aws_sg_rules(boto_self)
 
-        #print "                     ----------------------------------- "
-        #print "                    |                                   |"
-        #print "                    |              debug_start          |"
-        #print "                    |                                   |"
-        #print "                     ----------------------------------- "
-        #print "________________________________________________________________________________"
-        #print "REMOTE RULES:"
-        #for rule in remote_rules:
-        #    print rule
-        #print "________________________________________________________________________________"
         if normalized_rule not in remote_rules:
-        #    print "CURRENT RULE:"
-        #    print normalized_rule
-        #    print "    Not found in: "
-        #    print " _______________________________________________________________________________"
-        #    print "|_______________________________________________________________________________|"
             boto_self.authorize(final_rule.ip_protocol, final_rule.from_port, final_rule.to_port, final_rule.cidr_ip, final_rule.src_group)
             time.sleep(AWS_API_COOLDOWN_PERIOD)
         return
@@ -675,9 +702,7 @@ class SecurityGroupHelper(AWSHelper):
         If it is the first time the group is created, the referenced group will not exist yet, and so the rule will fail convergence.
         So, to keep it simple, any group that refers to another group in a Heet script will be put off to be converged after we are 
         sure that the creation of the rule should not fail unless there has been an actual error."""
-        print ""
-        print "----CONVERGE_DEPENDENCY() {}: {}---- {} of {} rules to process".format(self.base_name, key, self._num_converged_dependencies+1, len(self.dependent_rules))
-        #print ""
+        self.heet.logger.debug("----CONVERGE_DEPENDENCY() {}: {}---- {} of {} rules to process".format(self.base_name, key, self._num_converged_dependencies+1, len(self.dependent_rules)))
         self._num_converged_dependencies += 1
 
         boto_self = self.get_resource_object()
@@ -689,7 +714,6 @@ class SecurityGroupHelper(AWSHelper):
         init_rule = self.dependent_rules[key]
 
         #- grab the group we need from the resource references
-        #resource_name = name.split('/')[-1]
         if key == 'DESTROY_AGAIN':
             self.heet.logger.debug('converge_dependency: destroying 2nd round')
             self.destroy()
