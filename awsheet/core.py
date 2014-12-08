@@ -102,10 +102,16 @@ class AWSHeet:
         """Adds resources to a list and calls that resource's converge method"""
         self.resources.append(resource)
         if not self.args.destroy:
-            #-TODO: catch exceptions in the converge() cycle
+            #- catch exceptions in the converge() cycle
             #- to avoid calling the atexit functions
             #- when we are exiting because of an error
-            resource.converge()
+            try:
+                resource.converge()
+            except Exception as err:
+                self.logger.error('Exception caught in converge cycle')
+                #- skip execution of registered atexit functions
+                os._exit(os.EX_SOFTWARE)
+
 
         return resource
 
