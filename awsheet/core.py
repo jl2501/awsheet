@@ -108,7 +108,7 @@ class AWSHeet:
             try:
                 resource.converge()
             except Exception as err:
-                self.logger.error('Exception caught in converge cycle')
+                self.logger.error('Exception caught in converge cycle: {}'.format(str(err)))
                 #- skip execution of registered atexit functions
                 os._exit(os.EX_SOFTWARE)
 
