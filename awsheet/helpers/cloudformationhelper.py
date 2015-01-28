@@ -5,6 +5,7 @@ import os
 import json
 import subprocess
 import tempfile
+import tempfile
 import argparse
 import sys
 import logging
@@ -57,6 +58,13 @@ class CloudFormationHelper(AWSHelper):
         else:
             return stack.stack_status
 
+    def get_existing_template(self):
+        try:
+            template = self.conn.get_template(self.stack_name())
+            return template['GetTemplateResponse']['GetTemplateResult']['TemplateBody']
+        except boto.exception.BotoServerError:
+            return None
+
     def get_output(self, key, default=None):
         stack = self.describe()
         if stack is None:
@@ -85,6 +93,16 @@ class CloudFormationHelper(AWSHelper):
             capabilities=['CAPABILITY_IAM'])
 
     def update(self):
+        f = tempfile.NamedTemporaryFile(delete=False)
+        f.write(self.get_existing_template())
+        f.close()
+        output = os.popen('diff -u %s %s' % (f.name, self.template_file_name)).read()
+        os.unlink(f.name)
+        if output == '':
+            self.heet.logger.info("no apparent change in template '%s'" % self.stack_name())
+        else:
+            self.heet.logger.info("CloudFormation template diff: \n%s" % output)
+
         try:
             self.heet.logger.info("updating CloudFormation stack '%s'" % self.stack_name())
             self.conn.update_stack(self.stack_name(), template_body=self.template, parameters=self.parameters)
