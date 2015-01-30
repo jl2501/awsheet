@@ -1,5 +1,6 @@
 from .awshelper import AWSHelper
 import time
+import datetime
 import re
 import os
 import json
@@ -34,6 +35,7 @@ class CloudFormationHelper(AWSHelper):
             self.heet.get_region(),
             aws_access_key_id=heet.access_key_id,
             aws_secret_access_key=heet.secret_access_key)
+        self.ignore_event = {}
         heet.add_resource(self)
 
     def __str__(self):
@@ -57,6 +59,12 @@ class CloudFormationHelper(AWSHelper):
             return CloudFormationHelper.DOES_NOT_EXIST
         else:
             return stack.stack_status
+
+    def get_stack_events(self):
+        try:
+            return self.conn.describe_stack_events(self.stack_name())
+        except boto.exception.BotoServerError:
+            return None
 
     def get_existing_template(self):
         try:
@@ -118,21 +126,54 @@ class CloudFormationHelper(AWSHelper):
             raise Exception("existing stack '%s' is currently being deleted" % self.stack_name())
         if status == 'DELETE_FAILED':
             raise Exception("delete of stack '%s' failed" % self.stack_name())
+        # ignore old stack events before you initiate new events
+        self.ignore_old_events()
         if status == CloudFormationHelper.DOES_NOT_EXIST:
             self.create()
         else:
             self.update()
 
+
+    def ignore_old_events(self):
+        """
+        Identify events from previous stack updates so they can be ignored from now on.
+        """
+        events = self.get_stack_events()
+        if not events:
+            return
+        for e in events:
+            self.ignore_event[e.event_id] = 1
+
+    def log_recent_events(self):
+        events = self.get_stack_events()
+        if not events:
+            return
+        for e in reversed(events):
+            if e.event_id in self.ignore_event:
+                continue
+            self.ignore_event[e.event_id] = 1
+            self.heet.logger.debug(
+                "CF-event logical:%s status:%s reason:%s physical:%s" % (
+                    e.logical_resource_id,
+                    e.resource_status,
+                    e.resource_status_reason,
+                    e.physical_resource_id
+                )
+            )
+
     def wait_for_complete(self):
         while(True):
+            self.log_recent_events()
             status = self.status()
+            self.heet.logger.debug("CloudFormation stack '%s' status: %s" % (self.stack_name(), status))
             if status == 'ROLLBACK_COMPLETE':
                 raise Exception("CloudFormation stack '%s' status: %s" % (self.stack_name(), status))
-            if re.search('COMPLETE|FAILED', status):
+            if re.search('COMPLETE|FAILED', status) and not re.search('PROGRESS', status):
+                time.sleep(5)
+                self.log_recent_events()
                 break
             if status == CloudFormationHelper.DOES_NOT_EXIST:
                 break
-            self.heet.logger.debug("CloudFormation stack '%s' status: %s" % (self.stack_name(), status))
             time.sleep(5)
 
     def converge(self):
