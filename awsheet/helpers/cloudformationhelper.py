@@ -6,7 +6,6 @@ import os
 import json
 import subprocess
 import tempfile
-import tempfile
 import argparse
 import sys
 import logging
@@ -104,7 +103,8 @@ class CloudFormationHelper(AWSHelper):
         f = tempfile.NamedTemporaryFile(delete=False)
         f.write(self.get_existing_template())
         f.close()
-        output = os.popen('diff -u %s %s' % (f.name, self.template_file_name)).read()
+        diffcmd = 'colordiff' if not subprocess.call(['which', 'colordiff']) else 'diff'
+        output = os.popen('%s -u %s %s' % (diffcmd, f.name, self.template_file_name)).read()
         os.unlink(f.name)
         if output == '':
             self.heet.logger.info("no apparent change in template '%s'" % self.stack_name())
