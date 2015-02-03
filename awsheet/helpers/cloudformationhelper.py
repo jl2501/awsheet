@@ -110,6 +110,11 @@ class CloudFormationHelper(AWSHelper):
             self.heet.logger.info("no apparent change in template '%s'" % self.stack_name())
         else:
             self.heet.logger.info("CloudFormation template diff: \n%s" % output)
+            sys.stdout.write("\nAre you sure you want to update the CloudFormation stack [ %s ] ? y/N: " % self.stack_name())
+            choice = raw_input().lower()
+            if choice != 'y':
+                self.heet.logger.warn("Abort - not updating the CloudFormation stack [ %s ] without affirmation" % self.stack_name());
+                exit(1)
 
         try:
             self.heet.logger.info("updating CloudFormation stack '%s'" % self.stack_name())
