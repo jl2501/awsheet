@@ -105,31 +105,40 @@ class AWSHeet:
     def add_resource(self, resource):
         """Adds resources to a list and calls that resource's converge method"""
         self.resources.append(resource)
-        if not self.args.destroy:
-            #- catch exceptions in the converge() cycle
-            #- to avoid calling the atexit functions
-            #- when we are exiting because of an error
-            try:
-                resource.converge()
-            except Exception as err:
-                self.logger.error('Exception caught in converge cycle: {}'.format(str(err)))
-                #- skip execution of registered atexit functions
-                os._exit(os.EX_SOFTWARE)
-
-
+        self.logger.info('{}: added resource: {}'.format(self.__class__.__name__, resource.__class__.__name__))
         return resource
 
+
+
+    def converge_all(self, mode='test'):
+        """Converges all the resources"""
+        if mode == 'test':
+            self.logger.info('In real mode, this will loop through the resources and call converge on each one. Returning having done nothing...')
+            return
+
+
+        else:
+            for res_x in self.resources:
+                #- catch exceptions in the converge() cycle
+                #- to avoid calling the atexit functions
+                #- when we are exiting because of an error
+                try:
+                    res_x.converge()
+                except Exception as err:
+                    self.logger.error('Exception caught in converge phase of {} resource: {}'.format(res_x.__class__.__name__, str(err)) )
+                    #- skip execution of registered atexit functions
+                    os._exit(os.EX_SOFTWARE)
+    
+    
 
 
     def add_dependent_resource(self, dependent_resource, key_name):
         """Adds resources to a list and registers that resource's converge_dependency() method
         to be called at program exit and passes it the resource_name that it passed us.
-        When a resource calls this, it also passes in a tag, used internally as a dict key, so that
-        if a resource makes multiple calls to this, they can associate a string with each dependent
-        event that they need to handle when the resource's converge_dependency() method is called back
-        self.dependent_resources[key_name] = dependent_resource
-        at program exit. 
-
+        When a resource calls this, it can use they key_name as a tag, so that
+        if a resource has multiple reasons to mark a resource as dependent, an association with each dependent
+        event can be made. Each invocation of this method results in another call of the resources 'converge_dependency'
+        method at the time of program exit. 
         Callbacks and tags are issued at exit in LIFO order."""
         atexit.register(dependent_resource.converge_dependency, key_name)
         return
@@ -137,7 +146,8 @@ class AWSHeet:
 
 
     def _finalize(self):
-        """Run this function automatically atexit. If --destroy flag is use, destroy all resouces in reverse order"""
+        """Used only in destroy mode.
+        Run this function automatically atexit. If --destroy flag is use, destroy all resouces in reverse order"""
         if not self.args.destroy:
             return
         sys.stdout.write("You have asked to destroy the following resources from [ %s / %s ]:\n\n" % (self.base_name, self.get_environment()))
