@@ -26,7 +26,7 @@ class InstanceHelper(AWSHelper):
     role_counts = {}
 
 
-    def __init__(self, heet, role, normalize_name=False, **kwargs):
+    def __init__(self, heet, role, normalize_name=False, *args, **kwargs):
         self.heet = heet
         self.heet.logger.debug('{}.__init__: kwargs {}'.format(self.__class__.__name__, pprint.pprint(kwargs)) )
 
@@ -34,6 +34,7 @@ class InstanceHelper(AWSHelper):
         self.environment = heet.get_value('environment', kwargs, default=heet.get_environment())
         self.normalize_name = normalize_name
         self.kwargs = kwargs
+
         self.ami = heet.get_value('ami', kwargs)
         self.pv_ami = heet.get_value('pv_ami', kwargs)
         self.hvm_ami = heet.get_value('hvm_ami', kwargs)
