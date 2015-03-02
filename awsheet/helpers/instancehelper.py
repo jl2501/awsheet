@@ -1,6 +1,7 @@
 from ..core import AWSHeet
 from .awshelper import AWSHelper
 from .nicknamehelper import NickNameHelper
+import pprint
 import time
 import re
 import os
@@ -19,8 +20,16 @@ import boto.vpc
 
 class InstanceHelper(AWSHelper):
     "modular and convergent ec2 instances"
+
+    # cache whether or not a subnet is public or private
+    subnet_public = {'key' : 'value'}
+    role_counts = {}
+
+
     def __init__(self, heet, role, normalize_name=False, **kwargs):
         self.heet = heet
+        self.heet.logger.debug('{}.__init__: kwargs {}'.format(self.__class__.__name__, pprint.pprint(kwargs)) )
+
         self.role = role
         self.environment = heet.get_value('environment', kwargs, default=heet.get_environment())
         self.normalize_name = normalize_name
@@ -30,54 +39,89 @@ class InstanceHelper(AWSHelper):
         self.hvm_ami = heet.get_value('hvm_ami', kwargs)
         self.key_name = heet.get_value('key_name', kwargs)
         self.instance_type = heet.get_value('instance_type', kwargs, default='t1.micro')
+
         # if instance does not support pv ami, use the default hvm_ami if defined
         if not self.supports_pv() and not self.hvm_ami is None:
             self.ami = self.hvm_ami
+
+
         # if self.ami is not defined (by default or via parameter), use the default pv_ami if defined
         if self.ami is None and not self.pv_ami is None:
             self.ami = self.pv_ami
+
+
         self.version = heet.get_value('version', kwargs, default=heet.get_version())
         self.index = heet.get_value('index', kwargs, default=InstanceHelper.get_count_of_role(role))
+
+
         # if subnets is provided as a list, pick a round-robin subnet_id
         self.subnets = heet.get_value('subnets', kwargs, default=[])
+
         if (isinstance(self.subnets, list) and len(self.subnets) > 0):
-            # self.index is one-based so subtract one to get zero-based
-            default_subnet_id = self.subnets[(self.index - 1) % len(self.subnets)]
+            # offset by 1. zero-based indexes in python lists
+            default_subnet_id = self.subnets[ ((self.index - 1) % len(self.subnets)) ]
+
         else:
             default_subnet_id = None
+
+
         self.subnet_id = heet.get_value('subnet_id', kwargs, default=default_subnet_id)
+
+
         # combine base_security_groups from heet defaults and security_groups from kwargs
         self.base_security_groups = heet.get_value('base_security_groups', default=[])
         self.security_groups = heet.get_value('security_groups', kwargs, default=[])
         self.security_groups.extend(self.base_security_groups)
         user_data = heet.get_value('user_data', kwargs)
+
+        #- if the user_data is a dict, json encode it. Else assume it is JSON-encoded already.
         self.user_data = json.dumps(user_data) if type(user_data) == dict else user_data
+
         self.conn = boto.ec2.connect_to_region(
             heet.get_region(),
             aws_access_key_id=heet.access_key_id,
             aws_secret_access_key=heet.secret_access_key)
+
         self.vpc_conn = boto.vpc.connect_to_region(
             heet.get_region(),
             aws_access_key_id=heet.access_key_id,
             aws_secret_access_key=heet.secret_access_key)
-        self.public = heet.get_value('associate_public_ip_address', kwargs, default=self.is_subnet_public(self.subnet_id))
+
+
+        #- NBD: self.public == will this instance have a publicly-accessible IP address or not?
+        #self.public = heet.get_value('associate_public_ip_address', kwargs, default=self.is_subnet_public(self.subnet_id))
+        self.public = heet.get_value('associate_public_ip_address', kwargs, default=False)
+
 
         # need unique way of identifying the instance based upon the inputs of this class (i.e. not the EC2 instance-id)
-        #self.unique_tag = '%s__%s__v%s__i%s' % (self.role, self.environment, self.version, self.index)
         self.unique_tag = '%s/%s/v=%s/%s/%s/index=%s/%s' % (self.heet.base_name, self.environment, self.version, self.ami, self.instance_type, self.index, self.role)
+
+
+        #- Heet Protocol: 
         # call post_init_hook before add_resource/converge
         self.post_init_hook()
+
+        #- Heet Protocol: 
+        #-  add_resource to the list of resources that the AWSHeet object is
+        #-  responsible for calling back the converge methods of.
         heet.add_resource(self)
+
+
 
     def __str__(self):
         return "Instance %s" % self.unique_tag
 
+
+
     def get_resource_object(self):
         """return boto object for existing resource or None of doesn't exist. the response is not cached"""
+
         for instance in self.conn.get_only_instances(filters={'tag:'+AWSHeet.TAG:self.unique_tag}):
             if instance.state == 'pending' or instance.state == 'running':
                 return instance
         return None
+
+
 
     def get_instance(self):
         """cached copy of get_resource_object()"""
@@ -85,12 +129,16 @@ class InstanceHelper(AWSHelper):
             self.instance = self.get_resource_object()
         return self.instance
 
+
+
     def find_key_name(self):
         """returns first Key Pair returned by api. This is just a guess that should work for some people if no key pair is specified"""
         key_pairs = self.conn.get_all_key_pairs()
         if len(key_pairs) == 0:
             raise Exception("your AWS account must have at least one Key Pair https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#KeyPairs:")
         return key_pairs[0].name
+
+
 
     def provision_resource(self):
         """ask EC2 for a new instance and return boto ec2 instance object"""
@@ -101,6 +149,7 @@ class InstanceHelper(AWSHelper):
             self.key_name = self.find_key_name()
             self.heet.logger.debug("no key_name was provided, so use the first Key Pair from api: '%s'" % self.key_name)
 
+
         run_kwargs = {
             # only supporting 1 instance per reservation / helper
             'min_count' : 1,
@@ -110,6 +159,7 @@ class InstanceHelper(AWSHelper):
             'instance_type' : self.instance_type
             }
 
+
         # pass in any possibly argument to run_instances based on constructor args and heet defaults
         for arg in [
             'addressing_type', 'placement', 'kernel_id', 'ramdisk_id', 'monitoring_enabled',
@@ -118,6 +168,7 @@ class InstanceHelper(AWSHelper):
             'instance_profile_name', 'instance_profile_arn', 'tenancy', 'ebs_optimized', 'dry_run'
             ]:
             run_kwargs[arg] = self.heet.get_value(arg, kwargs=self.kwargs)
+
 
         if self.subnet_id:
             # AWS expect security group *ids* when calling via this technique
@@ -129,12 +180,15 @@ class InstanceHelper(AWSHelper):
                 )
             interfaces = boto.ec2.networkinterface.NetworkInterfaceCollection(interface)
             run_kwargs['network_interfaces'] = interfaces
+
         else:
             # AWS expect security groups *names* when calling via this technique
             run_kwargs['security_groups'] = self.security_groups
 
+
         #run_kwargs['dry_run'] = True
         reservation = self.conn.run_instances(self.ami, **run_kwargs)
+
         return reservation.instances[0]
 
 
@@ -170,16 +224,27 @@ class InstanceHelper(AWSHelper):
         if not self.get_instance():
             self.instance = self.provision_resource()
             self.wait_unil_ready()
+
         self.set_tag(AWSHeet.TAG, self.unique_tag)
         self.set_tag('Name', self.get_name())
+
         if self.get_dnsname():
             NickNameHelper(self.heet, self.get_dnsname(), self)
+
         if self.get_index_dnsname():
             NickNameHelper(self.heet, self.get_index_dnsname(), self)
+
+
         # set the security groups in case they have changes since the instance was first created
         self.conn.modify_instance_attribute(self.get_instance().id, 'groupSet', self.security_groups)
+
+
+        #- Call post_converge hook. (To be set in your subclass of this base class)
         self.post_converge_hook()
+
+
         name = self.get_dnsname()
+
         if not name:
             name = self.get_instance().public_dns_name
         if not name:
@@ -252,12 +317,11 @@ class InstanceHelper(AWSHelper):
             self.heet.logger.debug("setting tag %s=%s on instance %s" % (key, value, instance))
             instance.add_tag(key, value)
 
-    # cache whether or not a subnet is public or private
-    subnet_public = {}
+
+
 
     def is_subnet_public(self, subnet_id):
         """returns true if the Subnet is associated with a Route Table with a default route to an Internet Gateway"""
-
         # cache whether or not a subnet is public or private
         if subnet_id in InstanceHelper.subnet_public:
             return InstanceHelper.subnet_public[subnet_id]
@@ -277,7 +341,10 @@ class InstanceHelper(AWSHelper):
         InstanceHelper.subnet_public[subnet_id] = public
         return public
 
-    role_counts = {}
+
+
+
+
     @classmethod
     def get_count_of_role(cls, role):
         """Return count of instances with this role. First invocation returns 1, second returns 2, etc."""
