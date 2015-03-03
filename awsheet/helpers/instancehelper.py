@@ -29,7 +29,8 @@ class InstanceHelper(AWSHelper):
     def __init__(self, heet, role, normalize_name=False, *args, **kwargs):
         print 'entered InstanceHelper __init__'
         sys.stdout.flush()
-        heet.logger.debug('{}.__init__: kwargs {}'.format(self.__class__.__name__, pprint.pprint(kwargs)) )
+        #heet.logger.debug('{}.__init__: kwargs {}'.format(self.__class__.__name__, pprint.pprint(kwargs)) )
+        print '{}.__init__: kwargs {}'.format(self.__class__.__name__, kwargs)
         self.heet = heet
 
         self.role = role
