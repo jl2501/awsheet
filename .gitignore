@@ -8,3 +8,4 @@ dist/
 build/*
 sgh_todo
 *.pickle
+*.swp
