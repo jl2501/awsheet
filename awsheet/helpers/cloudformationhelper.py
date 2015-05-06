@@ -1,5 +1,6 @@
 from .awshelper import AWSHelper
 import time
+import datetime
 import re
 import os
 import json
@@ -33,6 +34,7 @@ class CloudFormationHelper(AWSHelper):
             self.heet.get_region(),
             aws_access_key_id=heet.access_key_id,
             aws_secret_access_key=heet.secret_access_key)
+        self.ignore_event = {}
         heet.add_resource(self)
 
     def __str__(self):
@@ -56,6 +58,19 @@ class CloudFormationHelper(AWSHelper):
             return CloudFormationHelper.DOES_NOT_EXIST
         else:
             return stack.stack_status
+
+    def get_stack_events(self):
+        try:
+            return self.conn.describe_stack_events(self.stack_name())
+        except boto.exception.BotoServerError:
+            return None
+
+    def get_existing_template(self):
+        try:
+            template = self.conn.get_template(self.stack_name())
+            return template['GetTemplateResponse']['GetTemplateResult']['TemplateBody']
+        except boto.exception.BotoServerError:
+            return None
 
     def get_output(self, key, default=None):
         stack = self.describe()
@@ -85,6 +100,22 @@ class CloudFormationHelper(AWSHelper):
             capabilities=['CAPABILITY_IAM'])
 
     def update(self):
+        f = tempfile.NamedTemporaryFile(delete=False)
+        f.write(self.get_existing_template())
+        f.close()
+        diffcmd = 'colordiff' if not subprocess.call(['which', 'colordiff']) else 'diff'
+        output = os.popen('%s -u %s %s' % (diffcmd, f.name, self.template_file_name)).read()
+        os.unlink(f.name)
+        if output == '':
+            self.heet.logger.info("no apparent change in template '%s'" % self.stack_name())
+        else:
+            self.heet.logger.info("CloudFormation template diff: \n%s" % output)
+            sys.stdout.write("\nAre you sure you want to update the CloudFormation stack [ %s ] ? y/N: " % self.stack_name())
+            choice = raw_input().lower()
+            if choice != 'y':
+                self.heet.logger.warn("Abort - not updating the CloudFormation stack [ %s ] without affirmation" % self.stack_name());
+                exit(1)
+
         try:
             self.heet.logger.info("updating CloudFormation stack '%s'" % self.stack_name())
             self.conn.update_stack(self.stack_name(), template_body=self.template, parameters=self.parameters)
@@ -100,21 +131,54 @@ class CloudFormationHelper(AWSHelper):
             raise Exception("existing stack '%s' is currently being deleted" % self.stack_name())
         if status == 'DELETE_FAILED':
             raise Exception("delete of stack '%s' failed" % self.stack_name())
+        # ignore old stack events before you initiate new events
+        self.ignore_old_events()
         if status == CloudFormationHelper.DOES_NOT_EXIST:
             self.create()
         else:
             self.update()
 
+
+    def ignore_old_events(self):
+        """
+        Identify events from previous stack updates so they can be ignored from now on.
+        """
+        events = self.get_stack_events()
+        if not events:
+            return
+        for e in events:
+            self.ignore_event[e.event_id] = 1
+
+    def log_recent_events(self):
+        events = self.get_stack_events()
+        if not events:
+            return
+        for e in reversed(events):
+            if e.event_id in self.ignore_event:
+                continue
+            self.ignore_event[e.event_id] = 1
+            self.heet.logger.debug(
+                "CF-event logical:%s status:%s reason:%s physical:%s" % (
+                    e.logical_resource_id,
+                    e.resource_status,
+                    e.resource_status_reason,
+                    e.physical_resource_id
+                )
+            )
+
     def wait_for_complete(self):
         while(True):
+            self.log_recent_events()
             status = self.status()
+            self.heet.logger.debug("CloudFormation stack '%s' status: %s" % (self.stack_name(), status))
             if status == 'ROLLBACK_COMPLETE':
                 raise Exception("CloudFormation stack '%s' status: %s" % (self.stack_name(), status))
-            if re.search('COMPLETE|FAILED', status):
+            if re.search('COMPLETE|FAILED', status) and not re.search('PROGRESS', status):
+                time.sleep(5)
+                self.log_recent_events()
                 break
             if status == CloudFormationHelper.DOES_NOT_EXIST:
                 break
-            self.heet.logger.debug("CloudFormation stack '%s' status: %s" % (self.stack_name(), status))
             time.sleep(5)
 
     def converge(self):
