@@ -75,7 +75,7 @@ SecurityGroupRule = collections.namedtuple('SecurityGroupRule', ['ip_protocol', 
 
 #- rm_group: only try to delete the group, fail if the API call fails
 #- rm_instances: delete all the instances in this group before attempting deletion of this security group
-#- rm_enis: delete all of the Elastic Network Interfaces in this security group before attempting deletion of this security group 
+#- rm_enis: delete all of the Elastic Network Interfaces in this security group before attempting deletion of this security group
 SecurityGroupDeleteMode = collections.namedtuple('SecurityGroupDeleteMode', ['rm_group', 'rm_instances', 'rm_enis'])
 
 
@@ -167,10 +167,10 @@ class SecurityGroupHelper(AWSHelper):
                     normalized_group_id = grant.group_id
                     rule = SecurityGroupRule(rule.ip_protocol, rule.from_port, rule.to_port, grant.cidr_ip, normalized_group_id)
 
-                    #- be sure that we are always comparing similarly normalized rules 
+                    #- be sure that we are always comparing similarly normalized rules
                     #- apply self.normalize_rule to API returned rules as well
                     normalized_rules.add(self.normalize_rule(rule))
-                
+
             return normalized_rules
 
 
@@ -296,12 +296,12 @@ class SecurityGroupHelper(AWSHelper):
                     ipaddress.IPv4Network(unicode(rule.cidr_ip))
                 except ValueError as err:
                     #self.heet.logger.debug(' ^^^ rule has invalid cidr_ip')
-                    rule_status.append('rule has an invalid cidr_ip value')
+                    rule_status.append('rule has an invalid cidr_ip value: [{}]'.format(rule.cidr_ip))
 
         elif rule.cidr_ip is None and rule.src_group is None:
             #self.heet.logger.debug(' ^^^ rule has neither cidr_ip nor src_group')
             rule_status.append('Must specify one or other of [cidr_ip, src_group]')
-               
+
         else:
             if rule.src_group == 'self':
                 #self.heet.logger.debug(' ^^^ rule src_group refers to "self"')
@@ -389,7 +389,7 @@ class SecurityGroupHelper(AWSHelper):
         Currently only checks from_port and to_port for '-1' or None and normalizes them to be None as that's what the API returns"""
 
         #- make a mutable copy
-        new_rule = {'ip_protocol' : rule.ip_protocol, 
+        new_rule = {'ip_protocol' : rule.ip_protocol,
                 'from_port' : rule.from_port,
                 'to_port' : rule.to_port,
                 'cidr_ip' : rule.cidr_ip,
@@ -421,8 +421,8 @@ class SecurityGroupHelper(AWSHelper):
 
             except KeyError as err:
                 self.heet.logger.debug('*** normalize_rule: resource_reference not found: {}, will handle in 2nd pass'.format(rule.src_group))
-                #- it wasn't in the reference table yet, 
-                #- we'll handle this in converge() and converge_dependency() 
+                #- it wasn't in the reference table yet,
+                #- we'll handle this in converge() and converge_dependency()
                 pass
 
         if rule.ip_protocol == -1:
@@ -435,7 +435,7 @@ class SecurityGroupHelper(AWSHelper):
             new_rule['from_port'] = None
             new_rule['to_port'] = None
 
-        
+
         final_rule = SecurityGroupRule(new_rule['ip_protocol'], new_rule['from_port'], new_rule['to_port'], new_rule['cidr_ip'], new_rule['src_group'])
         return final_rule
 
@@ -510,7 +510,7 @@ class SecurityGroupHelper(AWSHelper):
 
     def converge(self):
         """Adds missing rules, revokes extra rules, creates entire group if necessary
-        if the rule can't be converged yet (due to an unresolveable resource reference, 
+        if the rule can't be converged yet (due to an unresolveable resource reference,
         we'll let heet know to call us at the module exit time and re-try via converge_dependency()
         when we have the full module resource reference table"""
 
@@ -614,7 +614,7 @@ class SecurityGroupHelper(AWSHelper):
                     print str(desired_rules)
                     print ""
                     print ""
-    
+
                     #- boto-specific: get the referring security group boto-level object to delete this rule
                     #- TODO: this may be redundant if normalization strips the boto object for the src_group
                     #- as I'm resolving here. This isn't necessary if the pre-normalized rule has the object in it
@@ -654,18 +654,18 @@ class SecurityGroupHelper(AWSHelper):
         #- TODO: clean this up
         #- we need the ID for comparisons, but we need the object for the API call
         #- and we start with a resource reference
-        new_rule = SecurityGroupRule(init_rule.ip_protocol, 
-                                     init_rule.from_port, 
-                                     init_rule.to_port, 
-                                     init_rule.cidr_ip, 
+        new_rule = SecurityGroupRule(init_rule.ip_protocol,
+                                     init_rule.from_port,
+                                     init_rule.to_port,
+                                     init_rule.cidr_ip,
                                      boto_src_group.id)
 
         normalized_rule = self.normalize_rule(new_rule)
 
-        final_rule = SecurityGroupRule(normalized_rule.ip_protocol, 
-                                       normalized_rule.from_port, 
-                                       normalized_rule.to_port, 
-                                       normalized_rule.cidr_ip, 
+        final_rule = SecurityGroupRule(normalized_rule.ip_protocol,
+                                       normalized_rule.from_port,
+                                       normalized_rule.to_port,
+                                       normalized_rule.cidr_ip,
                                        boto_src_group)
 
         remote_rules = self.normalize_aws_sg_rules(boto_self)
@@ -700,7 +700,7 @@ class SecurityGroupHelper(AWSHelper):
         This is where we converge the rules that refer to other security groups that are declared in the same AWSHeet module
         Dependencies here is any security group rule that referenced another Heet group that is being declared in this script.
         If it is the first time the group is created, the referenced group will not exist yet, and so the rule will fail convergence.
-        So, to keep it simple, any group that refers to another group in a Heet script will be put off to be converged after we are 
+        So, to keep it simple, any group that refers to another group in a Heet script will be put off to be converged after we are
         sure that the creation of the rule should not fail unless there has been an actual error."""
         self.heet.logger.debug("----CONVERGE_DEPENDENCY() {}: {}---- {} of {} rules to process".format(self.base_name, key, self._num_converged_dependencies+1, len(self.dependent_rules)))
         self._num_converged_dependencies += 1
@@ -721,7 +721,7 @@ class SecurityGroupHelper(AWSHelper):
             src_group_name = self.get_src_group_from_key(key)
             if self.heet.is_resource_ref(src_group_name):
                 #- a bit opaque, but resource references are only called for rules that are trying
-                #- to be added, so we know if we see a resource reference here that this rule was 
+                #- to be added, so we know if we see a resource reference here that this rule was
                 #- trying to be added and failed due to a resource reference being unable to be resolved
                 self.heet.logger.debug('converge_dependency: add_rule detected: [{}]'.format(init_rule))
                 self.converge_dependent_add_rule(init_rule)
