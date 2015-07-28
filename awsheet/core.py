@@ -18,6 +18,7 @@ class AWSHeet:
         self.defaults = defaults
         self.resources = []
         self.parse_args()
+        self.ec2_c = boto.ec2.connect_to_region(self.args.region)
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
         handler = logging.StreamHandler(sys.stdout)
@@ -42,7 +43,7 @@ class AWSHeet:
         #- resource reference table - this is used to refer to other resources by '@name'
         self.resource_refs = dict()
 
-        #- If a resource needs some events to occur before it can fully converge then 
+        #- If a resource needs some events to occur before it can fully converge then
         #- it must converge in 2 phases.
         #- In the second phase the resource can assume the resource reference table is complete
 
@@ -50,6 +51,8 @@ class AWSHeet:
         #- Heet will register that resources converge_dependency() method to run at exit
         self.dependent_resources = dict()
 
+        #- if we are run in destroy mode, do everything except call converge() on the resources
+        #- in the resources list, then exit. At exit time, run this function.
         atexit.register(self._finalize)
 
 
@@ -128,7 +131,7 @@ class AWSHeet:
         if a resource makes multiple calls to this, they can associate a string with each dependent
         event that they need to handle when the resource's converge_dependency() method is called back
         self.dependent_resources[key_name] = dependent_resource
-        at program exit. 
+        at program exit.
 
         Callbacks and tags are issued at exit in LIFO order."""
         atexit.register(dependent_resource.converge_dependency, key_name)
@@ -158,10 +161,19 @@ class AWSHeet:
         parser = argparse.ArgumentParser(description='create and destroy AWS resources idempotently')
         parser.add_argument('-d', '--destroy', help='release the resources (terminate instances, delete stacks, etc)', action='store_true')
         parser.add_argument('-e', '--environment', help='e.g. production, staging, testing, etc', default='testing')
+        parser.add_argument('-r', '--region', help='region name to connect to', default='us-east-1')
         parser.add_argument('-v', '--version', help='create/destroy resources associated with a version to support '
                                                     'having multiple versions of resources running at the same time. '
                                                     'Some resources are not possibly able to support versions - '
                                                     'such as CNAMEs without a version string.')
+        #- TODO: to support this 'dry_run' feature request, we will add
+        #-     a wrapper library for all the boto stuff and import boto through that abstraction
+        #-     all the boto stuff that would write something will then be placed in a sub-layer of the
+        #-     overall boto abstraction that doesn't run in dry_run mode
+        #-     (when some lookupable way to access the value
+        #-     that is set here in some kind of "mode configuration" object says that we are in 'dry_run' mode.
+        #-      (configuration object in C would be bitmask of logical OR flags kind of data structure / an object with
+        #-      a bunch of bool-like attributes for each mode...))
         #parser.add_argument('-n', '--dry-run', help='environment', action='store_true')
         self.args = parser.parse_args()
 
