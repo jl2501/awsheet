@@ -63,8 +63,11 @@ class AWSHeet:
         user_boto_config = os.path.join(os.environ.get('HOME'), ".boto")
         self.parse_creds_from_file(user_boto_config)
 
-        self.access_key_id = os.getenv('AWS_ACCESS_KEY_ID', None)
-        self.secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY', None)
+
+        if os.getenv('AWS_ACCESS_KEY_ID', None) is not None:
+            self.access_key_id = os.getenv('AWS_ACCESS_KEY_ID', None)
+        if os.getenv('AWS_SECRET_ACCESS_KEY', None) is not None:
+            self.secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY', None)
 
         auth_file = os.path.join(self.base_dir, self.base_name + ".auth")
         self.parse_creds_from_file(auth_file)
@@ -211,9 +214,23 @@ class AWSHeet:
 
 
     def exec_awscli(self, cmd):
-        env = os.environ.copy()
-        env['AWS_ACCESS_KEY_ID'] = self.access_key_id
-        env['AWS_SECRET_ACCESS_KEY'] = self.secret_access_key
+        init_env = os.environ.copy()
+        env = dict()
+
+        #- strip the environment of non utf-8 encodable characters or Popen will fail
+        for key_x, value_x in init_env.iteritems():
+            key_y = value_y = ''
+            try:
+                key_y = str(key_x).encode('utf-8', 'replace')
+                value_y = str(value_x).encode('utf-8', 'replace')
+            except UnicodeDecodeError as err:
+                print "removing environment setting {} from passed env due to Unicode Error.({})".format(key_x, value_x)
+                key_y = value_y = ''
+            env[key_y] = value_y
+
+        env['AWS_ACCESS_KEY_ID'] = self.access_key_id.encode('utf-8')
+        env['AWS_SECRET_ACCESS_KEY'] = self.secret_access_key.encode('utf-8')
+
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, env=env)
         return proc.communicate()[0]
 
