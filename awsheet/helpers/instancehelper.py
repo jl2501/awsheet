@@ -30,8 +30,8 @@ class InstanceHelper(AWSHelper):
         self.hvm_ami = heet.get_value('hvm_ami', kwargs)
         self.key_name = heet.get_value('key_name', kwargs)
         self.instance_type = heet.get_value('instance_type', kwargs, default='t1.micro')
-        # if instance does not support pv ami, use the default hvm_ami if defined
-        if not self.supports_pv() and not self.hvm_ami is None:
+        # if self.ami is not defined and instance does not support pv ami, use the default hvm_ami if defined
+        if self.ami is None and not self.supports_pv() and not self.hvm_ami is None:
             self.ami = self.hvm_ami
         # if self.ami is not defined (by default or via parameter), use the default pv_ami if defined
         if self.ami is None and not self.pv_ami is None:
