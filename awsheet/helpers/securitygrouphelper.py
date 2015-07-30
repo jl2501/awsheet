@@ -111,10 +111,12 @@ class SecurityGroupHelper(AWSHelper):
         #- these are actually dependent on the above working
         self.heet_id_tag = self.build_heet_id_tag()
 
-        self.conn = boto.ec2.connect_to_region(
-            self.region,
-            aws_access_key_id=heet.access_key_id,
-            aws_secret_access_key=heet.secret_access_key)
+        self.conn = self.heet.get_aws_service_connection(service_name='ec2')
+
+        #self.conn = boto.ec2.connect_to_region(
+        #    self.region,
+        #    aws_access_key_id=heet.access_key_id,
+        #    aws_secret_access_key=heet.secret_access_key)
 
         #- when we create a rule that references another group
         #- we have to check that group exists

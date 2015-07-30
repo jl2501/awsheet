@@ -28,9 +28,14 @@ class CNAMEHelper(AWSHelper):
         self.zone_id = self.heet.get_value('zone_id', kwargs, required=True)
         self.domain = self.heet.get_value('domain', kwargs, required=True)
         self.ttl = self.heet.get_value('ttl', kwargs, default=300)
-        self.conn = boto.connect_route53(
-            aws_access_key_id=heet.access_key_id,
-            aws_secret_access_key=heet.secret_access_key)
+
+        self.r53_c = self.heet.get_aws_service_connection(service_name='route53')
+        self.conn = self.r53_c
+
+        #self.conn = boto.connect_route53(
+        #    aws_access_key_id=heet.access_key_id,
+        #    aws_secret_access_key=heet.secret_access_key)
+
         # get_zone does not like leading periods
         self.zone = self.conn.get_zone(self.domain.lstrip('.'))
         heet.add_resource(self)

@@ -52,14 +52,20 @@ class InstanceHelper(AWSHelper):
         self.security_groups.extend(self.base_security_groups)
         user_data = heet.get_value('user_data', kwargs)
         self.user_data = json.dumps(user_data) if type(user_data) == dict else user_data
-        self.conn = boto.ec2.connect_to_region(
-            heet.get_region(),
-            aws_access_key_id=heet.access_key_id,
-            aws_secret_access_key=heet.secret_access_key)
-        self.vpc_conn = boto.vpc.connect_to_region(
-            heet.get_region(),
-            aws_access_key_id=heet.access_key_id,
-            aws_secret_access_key=heet.secret_access_key)
+
+        self.conn = self.heet.get_aws_service_connection(service_name='ec2')
+        self.vpc_conn = self.heet.get_aws_service_connection(service_name='vpc')
+
+        #self.conn = boto.ec2.connect_to_region(
+        #    heet.get_region(),
+        #    aws_access_key_id=heet.access_key_id,
+        #    aws_secret_access_key=heet.secret_access_key)
+        #self.vpc_conn = boto.vpc.connect_to_region(
+        #    heet.get_region(),
+        #    aws_access_key_id=heet.access_key_id,
+        #    aws_secret_access_key=heet.secret_access_key)
+
+
         self.public = heet.get_value('associate_public_ip_address', kwargs, default=self.is_subnet_public(self.subnet_id))
 
         # need unique way of identifying the instance based upon the inputs of this class (i.e. not the EC2 instance-id)

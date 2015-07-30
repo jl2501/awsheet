@@ -12,9 +12,13 @@ class NickNameHelper(AWSHelper):
         self.zone_id = self.heet.get_value('zone_id', required=True)
         self.domain = self.heet.get_value('domain', required=True)
         self.ttl = self.heet.get_value('ttl', kwargs, default=60)
-        self.conn = boto.connect_route53(
-            aws_access_key_id=heet.access_key_id,
-            aws_secret_access_key=heet.secret_access_key)
+
+        self.conn = self.heet.get_aws_service_connection(service_name='route53')
+
+        #self.conn = boto.connect_route53(
+        #    aws_access_key_id=heet.access_key_id,
+        #    aws_secret_access_key=heet.secret_access_key)
+
         # get_zone does not like leading periods
         self.zone = self.conn.get_zone(self.domain.lstrip('.'))
         heet.add_resource(self)

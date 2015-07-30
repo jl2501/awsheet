@@ -9,6 +9,9 @@ import boto
 import boto.ec2
 import boto.ec2.elb
 import collections
+import boto.cloudformation
+import boto.vpc
+import boto.route53
 
 class AWSHeet:
 
@@ -18,7 +21,6 @@ class AWSHeet:
         self.defaults = defaults
         self.resources = []
         self.parse_args()
-        self.ec2_c = boto.ec2.connect_to_region(self.args.region)
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
         handler = logging.StreamHandler(sys.stdout)
@@ -28,7 +30,6 @@ class AWSHeet:
         self.logger.addHandler(handler)
         self.base_dir = os.path.dirname(os.path.realpath(sys.argv[0]))
 
-
         #- allow user to explicitly set project name
         default_base_name = os.path.basename(sys.argv[0]).split('.')[0]
 
@@ -37,6 +38,7 @@ class AWSHeet:
         else:
             self.logger.info('Using parameter-based name override: {}'.format(name))
             self.base_name = name
+
 
         self.load_creds()
 
@@ -54,6 +56,43 @@ class AWSHeet:
         #- if we are run in destroy mode, do everything except call converge() on the resources
         #- in the resources list, then exit. At exit time, run this function.
         atexit.register(self._finalize)
+
+
+        #- All the AWS API service connection objects
+        self.aws_service_connections = self.create_aws_service_connections(region=self.get_region())
+
+
+
+    def create_aws_service_connections(self, region):
+        '''Create a connection to all the services needed.
+        Helper objects reference these connection objects so that there is a single code path for contacting the AWS API
+        that all goes through this Heet object'''
+        service_connections = {region: {}}
+
+        service_connections[region]['route53'] = boto.route53.connect_to_region(region)
+        service_connections[region]['cloudformation'] = boto.cloudformation.connect_to_region(region, aws_access_key_id=self.access_key_id, aws_secret_access_key=self.secret_access_key)
+        service_connections[region]['ec2'] = boto.ec2.connect_to_region(region, aws_access_key_id=self.access_key_id, aws_secret_access_key=self.secret_access_key)
+        service_connections[region]['vpc'] = boto.vpc.connect_to_region(region, aws_access_key_id=self.access_key_id, aws_secret_access_key=self.secret_access_key)
+
+        return service_connections
+
+
+
+    def service_is_region_specific(self, service_name):
+        return (service_name in ['route53', 'ec2', 'vpc', 'cloudformation'])
+
+
+
+    def get_aws_service_connection(self, service_name, region=None):
+        '''return the aws api service connection obejct for the named service in the named region'''
+        if region is None:
+            region = self.get_region()
+
+        if self.service_is_region_specific(service_name):
+            service_c = self.aws_service_connections[region][service_name]
+        else:
+            service_c = self.aws_service_connections[service_name]
+        return service_c
 
 
 

@@ -28,12 +28,20 @@ class CloudFormationHelper(AWSHelper):
         self.template = open(self.template_file_name, 'r').read();
         self.version = heet.get_value('version', kwargs, default=heet.get_version())
         self.parameters = heet.get_value('parameters', kwargs, default=())
+
         if type(self.parameters) is dict:
             self.parameters = tuple(self.parameters.items())
-        self.conn = boto.cloudformation.connect_to_region(
-            self.heet.get_region(),
-            aws_access_key_id=heet.access_key_id,
-            aws_secret_access_key=heet.secret_access_key)
+
+        #- use Heet to get the connection to AWS
+        self.cf_c = heet.get_aws_service_connection(service_name='cloudformation')
+        self.conn = self.cf_c
+
+        #- TODO: remove this
+        #self.conn = boto.cloudformation.connect_to_region(
+        #    self.heet.get_region(),
+        #    aws_access_key_id=heet.access_key_id,
+        #    aws_secret_access_key=heet.secret_access_key)
+
         self.ignore_event = {}
         heet.add_resource(self)
 
