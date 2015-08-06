@@ -20,7 +20,7 @@ class AWSHeet:
     def __init__(self, defaults={}, name=None):
         self.defaults = defaults
         self.resources = []
-        self.parse_args()
+        self.args = self.parse_args()
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
         handler = logging.StreamHandler(sys.stdout)
@@ -217,12 +217,13 @@ class AWSHeet:
         #-      (configuration object in C would be bitmask of logical OR flags kind of data structure / an object with
         #-      a bunch of bool-like attributes for each mode...))
         #parser.add_argument('-n', '--dry-run', help='environment', action='store_true')
-        self.args = parser.parse_args()
+        #self.args = parser.parse_args()
+        return parser.parse_args()
 
 
 
     def get_region(self):
-        return self.get_value('region', default='us-east-1')
+        return self.get_value('region', kwargs=args, default='us-east-1', required=True)
 
     def get_project(self):
         return self.base_name
