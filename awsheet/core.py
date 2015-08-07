@@ -17,10 +17,12 @@ class AWSHeet:
 
     TAG = 'AWSHeet'
 
-    def __init__(self, defaults={}, name=None):
+    def __init__(self, defaults={}, name=None, region=None):
         self.defaults = defaults
         self.resources = []
         self.args = self.parse_args()
+        self.region = self.args.region
+
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
         handler = logging.StreamHandler(sys.stdout)
@@ -223,7 +225,8 @@ class AWSHeet:
 
 
     def get_region(self):
-        return self.get_value('region', kwargs=args, default='us-east-1', required=True)
+        #return self.get_value('region', kwargs=args, default='us-east-1', required=True)
+        return self.region
 
     def get_project(self):
         return self.base_name
