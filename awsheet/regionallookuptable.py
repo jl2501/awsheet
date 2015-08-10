@@ -11,28 +11,36 @@ CONFIGURATION_FILENAME='regional_constants.yaml'
 
 
 class RegionalLookupTable(object):
-    def __init__(self, configuration_yaml=None, configuration_directory=CONFIGURATION_DIRECTORYe, configuration_filename=CONFIGURATION_FILENAME):
+    def __init__(self, configuration_yaml=None, configuration_directory=CONFIGURATION_DIRECTORY, configuration_filename=CONFIGURATION_FILENAME):
         '''Parse the YAML in to the internal lookup table'''
 
-        config_file_path = os.path.join(configuration_irectory, configuration_filename)
+        self.debug_mode = False
+        config_file_path = os.path.join(configuration_directory, configuration_filename)
         config_file_path = os.path.expandvars(config_file_path)
         config_file_path = os.path.expanduser(config_file_path)
         config_file_path = os.path.realpath(config_file_path)
 
-        with fp as open(config_file_path):
-            self.lookup_table = ruamel.yaml.load(fp, ruamel.yaml.RoundTripLoader)
+        with open(config_file_path) as fp:
+            self._lookup_table = ruamel.yaml.load(fp, ruamel.yaml.RoundTripLoader)
 
 
-    def lookup_by_region(region, key_path):
-        full_key_path = [region]
-        full_key_path.extend(key_path)
+    def lookup(self, region, key_path):
+        if self.debug_mode:
+            print "Looking up {} for {} region".format(key_path, region)
+        full_key_path = key_path.split('.')
+        full_key_path.insert(0, region)
+        if self.debug_mode:
+            print "len(full_key_path): {}({})".format(len(full_key_path), str(full_key_path))
 
         value = None
-        for key_x in key_path:
+        lookup_table = self._lookup_table
+        for key_x in full_key_path:
             try:
-                value = self.lookup_table[key_x]
-            except KeyError:
-                value = None
-                break
+                lookup_table = lookup_table[key_x]
 
-            return value
+            except KeyError as err:
+                print "No Data Exists for '{}'".format(str(key_path))
+                raise(err)
+
+        final_value = lookup_table
+        return final_value
