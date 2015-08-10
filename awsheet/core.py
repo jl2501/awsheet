@@ -13,14 +13,46 @@ import boto.cloudformation
 import boto.vpc
 import boto.route53
 
+def parse_cli_args():
+    parser = argparse.ArgumentParser(description='create and destroy AWS resources idempotently')
+    parser.add_argument('-d', '--destroy', help='release the resources (terminate instances, delete stacks, etc)', action='store_true')
+    parser.add_argument('-e', '--environment', help='e.g. production, staging, testing, etc', default='testing')
+    parser.add_argument('-r', '--region', help='region name to connect to', default='us-east-1')
+    parser.add_argument('-v', '--version', help='create/destroy resources associated with a version to support '
+                                                'having multiple versions of resources running at the same time. '
+                                                'Some resources are not possibly able to support versions - '
+                                                'such as CNAMEs without a version string.')
+    #- TODO: to support this 'dry_run' feature request, we will add
+    #-     a wrapper library for all the boto stuff and import boto through that abstraction
+    #-     all the boto stuff that would write something will then be placed in a sub-layer of the
+    #-     overall boto abstraction that doesn't run in dry_run mode
+    #-     (when some lookupable way to access the value
+    #-     that is set here in some kind of "mode configuration" object says that we are in 'dry_run' mode.
+    #-      (configuration object in C would be bitmask of logical OR flags kind of data structure / an object with
+    #-      a bunch of bool-like attributes for each mode...))
+    #parser.add_argument('-n', '--dry-run', help='environment', action='store_true')
+    #self.args = parser.parse_args()
+    return parser.parse_args()
+
+
+
+def get_region():
+    cli_args = parse_cli_args()
+    return cli_args.region
+
+
+
 class AWSHeet:
 
     TAG = 'AWSHeet'
 
-    def __init__(self, defaults={}, name=None, region=None):
+    def __init__(self, defaults={}, name=None, region=None, args=None):
         self.defaults = defaults
         self.resources = []
-        self.args = self.parse_args()
+        if args is None:
+            self.args = parse_cli_args()
+        else:
+            self.args = args
         self.region = self.args.region
 
         self.logger = logging.getLogger(__name__)
@@ -198,29 +230,6 @@ class AWSHeet:
         for resource in reversed(self.resources):
             resource.destroy()
         self.logger.info("all AWS resources in [ %s / %s ] have had destroy() called" % (self.base_name, self.get_environment()))
-
-
-
-    def parse_args(self):
-        parser = argparse.ArgumentParser(description='create and destroy AWS resources idempotently')
-        parser.add_argument('-d', '--destroy', help='release the resources (terminate instances, delete stacks, etc)', action='store_true')
-        parser.add_argument('-e', '--environment', help='e.g. production, staging, testing, etc', default='testing')
-        parser.add_argument('-r', '--region', help='region name to connect to', default='us-east-1')
-        parser.add_argument('-v', '--version', help='create/destroy resources associated with a version to support '
-                                                    'having multiple versions of resources running at the same time. '
-                                                    'Some resources are not possibly able to support versions - '
-                                                    'such as CNAMEs without a version string.')
-        #- TODO: to support this 'dry_run' feature request, we will add
-        #-     a wrapper library for all the boto stuff and import boto through that abstraction
-        #-     all the boto stuff that would write something will then be placed in a sub-layer of the
-        #-     overall boto abstraction that doesn't run in dry_run mode
-        #-     (when some lookupable way to access the value
-        #-     that is set here in some kind of "mode configuration" object says that we are in 'dry_run' mode.
-        #-      (configuration object in C would be bitmask of logical OR flags kind of data structure / an object with
-        #-      a bunch of bool-like attributes for each mode...))
-        #parser.add_argument('-n', '--dry-run', help='environment', action='store_true')
-        #self.args = parser.parse_args()
-        return parser.parse_args()
 
 
 
