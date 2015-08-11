@@ -5,23 +5,51 @@ in the future as the code is iteratively changed """
 
 import os
 import ruamel.yaml
+import logging
+import sys
+from ruamel.yaml.parser import ParserError
 
-CONFIGURATION_DIRECTORY='.'
-CONFIGURATION_FILENAME='regional_constants.yaml'
-
+region_list = [
+        'ap-northeast-1',
+        'ap-southeast-1',
+        'ap-southeast-2',
+        'eu-central-1',
+        'eu-west-1',
+        'sa-east-1',
+        'us-east-1',
+        'us-west-1',
+        'us-west-2']
 
 class RegionalLookupTable(object):
-    def __init__(self, configuration_yaml=None, configuration_directory=CONFIGURATION_DIRECTORY, configuration_filename=CONFIGURATION_FILENAME):
+    def __init__(self, configuration_yaml=None, configuration_directory=None, region_list=region_list):
         '''Parse the YAML in to the internal lookup table'''
 
         self.debug_mode = False
-        config_file_path = os.path.join(configuration_directory, configuration_filename)
-        config_file_path = os.path.expandvars(config_file_path)
-        config_file_path = os.path.expanduser(config_file_path)
-        config_file_path = os.path.realpath(config_file_path)
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter('(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        self.logger.addHandler(handler)
 
-        with open(config_file_path) as fp:
-            self._lookup_table = ruamel.yaml.load(fp, ruamel.yaml.RoundTripLoader)
+        if configuration_yaml:
+            self._lookup_table = configuration_yaml
+
+        else:
+            self._lookup_table = {}
+            if configuration_directory is None:
+                self.directory = os.path.dirname(os.path.realpath(sys.argv[0]))
+            else:
+                self.directory = configuration_directory
+            for region_x in region_list:
+                try:
+                    with open('{}/{}.yaml'.format(self.directory, region_x)) as fp:
+                        try:
+                            self._lookup_table[region_x] = ruamel.yaml.load(fp, ruamel.yaml.RoundTripLoader)
+                        except ParserError as err:
+                            print "skipping region '{}': unparseable configuration".format(region_x)
+                except IOError as err:
+                    print "skipping region '{}': no configuration found in directory {}".format(region_x, self.directory)
 
 
     def lookup(self, region, key_path):
