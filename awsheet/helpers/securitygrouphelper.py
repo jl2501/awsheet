@@ -749,20 +749,22 @@ class SecurityGroupHelper(AWSHelper):
         #- first delete any src_group rules so the group can be deleted
         self.heet.logger.debug('destroy [{}]: testing [{}] rules to remove ones w/ src_groups'.format(self.aws_name, len(boto_self.rules)))
         rules_copy = copy.deepcopy(boto_self.rules)
-        for boto_rule in rules_copy:
-            self.heet.logger.debug('destroy [{}]: testing rule for src_group: [{}]'.format(self.aws_name, boto_rule))
-            for boto_grant in boto_rule.grants:
-                if boto_grant.group_id is not None:
-                    self.heet.logger.debug('destroy [{}]: found rule with group_id: [{}]'.format(self.aws_name, boto_grant.group_id))
-                    try:
-                        src_group_ref = self.conn.get_all_security_groups(group_ids=[boto_grant.group_id])[0]
-                        self.heet.logger.debug('destroy [{}]: removing rule with src_group to remove group.({}:{})'.format(self.aws_name, boto_grant.group_id, src_group_ref.name))
-                        boto_self.revoke(boto_rule.ip_protocol, boto_rule.from_port, boto_rule.to_port, boto_grant.cidr_ip, src_group_ref)
-                        time.sleep(AWS_API_COOLDOWN_PERIOD)
-                    except boto.exception.EC2ResponseError as err:
-                        self.heet.logger.debug('destroy [{}]: failed to remove rule: [{}]'.format(self.aws_name, err.message))
+        if isinstance(rules_copy, collections.Iterable) and len(rules_copy) > 0:
+            for boto_rule in rules_copy:
+                self.heet.logger.debug('destroy [{}]: testing rule for src_group: [{}]'.format(self.aws_name, boto_rule))
+                for boto_grant in boto_rule.grants:
+                    if boto_grant.group_id is not None:
+                        self.heet.logger.debug('destroy [{}]: found rule with group_id: [{}]'.format(self.aws_name, boto_grant.group_id))
+                        try:
+                            src_group_ref = self.conn.get_all_security_groups(group_ids=[boto_grant.group_id])[0]
+                            self.heet.logger.debug('destroy [{}]: removing rule with src_group to remove group.({}:{})'.format(self.aws_name, boto_grant.group_id, src_group_ref.name))
+                            boto_self.revoke(boto_rule.ip_protocol, boto_rule.from_port, boto_rule.to_port, boto_grant.cidr_ip, src_group_ref)
+                            time.sleep(AWS_API_COOLDOWN_PERIOD)
+                        except boto.exception.EC2ResponseError as err:
+                            self.heet.logger.debug('destroy [{}]: failed to remove rule: [{}]'.format(self.aws_name, err.message))
 
         self.heet.logger.debug('destroy [{}]: done removing rules.'.format(self.aws_name))
+
         try:
             time.sleep(AWS_API_COOLDOWN_PERIOD)
             boto_self.delete()
