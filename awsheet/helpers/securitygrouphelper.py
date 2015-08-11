@@ -749,7 +749,7 @@ class SecurityGroupHelper(AWSHelper):
         #- first delete any src_group rules so the group can be deleted
         self.heet.logger.debug('destroy [{}]: testing [{}] rules to remove ones w/ src_groups'.format(self.aws_name, len(boto_self.rules)))
         rules_copy = copy.deepcopy(boto_self.rules)
-        if isinstance(rules_copy, collections.Iterable):
+        if isinstance(rules_copy, collections.Iterable) and len(rules_copy) > 0:
             for boto_rule in rules_copy:
                 self.heet.logger.debug('destroy [{}]: testing rule for src_group: [{}]'.format(self.aws_name, boto_rule))
                 for boto_grant in boto_rule.grants:
