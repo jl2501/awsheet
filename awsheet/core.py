@@ -53,7 +53,11 @@ class AWSHeet:
             self.args = parse_cli_args()
         else:
             self.args = args
-        self.region = self.args.region
+
+        if self.args.region and region is None:
+           self.region = self.args.region
+        else:
+            self.region = region
 
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
@@ -94,6 +98,7 @@ class AWSHeet:
 
         #- All the AWS API service connection objects
         self.aws_service_connections = self.create_aws_service_connections(region=self.get_region())
+        self.logger.info('AWS Region: {}'.format(self.get_region()))
 
 
 
