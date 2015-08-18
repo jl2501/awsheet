@@ -21,7 +21,7 @@ region_list = [
         'us-west-2']
 
 class RegionalLookupTable(object):
-    def __init__(self, configuration_yaml=None, configuration_directory=None, region_list=region_list):
+    def __init__(self, region_name, configuration_yaml=None, configuration_directory='./regional_constants'):
         '''Parse the YAML in to the internal lookup table'''
 
         self.debug_mode = False
@@ -31,6 +31,7 @@ class RegionalLookupTable(object):
         formatter = logging.Formatter('(asctime)s - %(name)s - %(levelname)s - %(message)s')
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
+        self.region_name = region_name
 
         if configuration_yaml:
             self._lookup_table = configuration_yaml
@@ -41,22 +42,20 @@ class RegionalLookupTable(object):
                 self.directory = os.path.dirname(os.path.realpath(sys.argv[0]))
             else:
                 self.directory = configuration_directory
-            for region_x in region_list:
-                try:
-                    with open('{}/{}.yaml'.format(self.directory, region_x)) as fp:
-                        try:
-                            self._lookup_table[region_x] = ruamel.yaml.load(fp, ruamel.yaml.RoundTripLoader)
-                        except ParserError as err:
-                            print "skipping region '{}': unparseable configuration".format(region_x)
-                except IOError as err:
-                    print "skipping region '{}': no configuration found in directory {}".format(region_x, self.directory)
+            try:
+                with open('{}/{}.yaml'.format(self.directory, self.region_name)) as fp:
+                    try:
+                        self._lookup_table = ruamel.yaml.load(fp, ruamel.yaml.RoundTripLoader)
+                    except ParserError as err:
+                        print "'{}': unparseable region configuration".format(self.region_name)
+            except IOError as err:
+                print "region '{}': no configuration found in directory {}".format(self.region_name, self.directory)
 
 
-    def lookup(self, region, key_path):
+    def lookup(self, key_path):
         if self.debug_mode:
-            print "Looking up {} for {} region".format(key_path, region)
+            print "Looking up {} for {} region".format(key_path, self.region_name)
         full_key_path = key_path.split('.')
-        full_key_path.insert(0, region)
         if self.debug_mode:
             print "len(full_key_path): {}({})".format(len(full_key_path), str(full_key_path))
 
