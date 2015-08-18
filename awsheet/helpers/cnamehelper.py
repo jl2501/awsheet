@@ -57,6 +57,11 @@ class CNAMEHelper(AWSHelper):
         if isinstance(self.value, AWSHelper):
             self.value = self.value.get_cname_target()
         current_record = self.get_resource_object()
+
+        #- if we got passed a null value, there is nothing to do
+        if self.value is None:
+            return None
+
         if current_record and current_record.resource_records:
             current_value = current_record.resource_records[0]
             # if CNAME already exists AND points at correct value, do nothing
