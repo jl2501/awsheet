@@ -80,10 +80,11 @@ class InstanceHelper(AWSHelper):
 
     def get_resource_object(self):
         """return boto object for existing resource or None of doesn't exist. the response is not cached"""
-        for instance in self.conn.get_only_instances(filters={'tag:'+AWSHeet.TAG:self.unique_tag}):
-            if instance.state == 'pending' or instance.state == 'running':
-                return instance
-        return None
+        matching_instances = self.conn.get_only_instances(filters={'tag:'+AWSHeet.TAG:self.unique_tag})
+        if len(matching_instances) > 0:
+            return matching_instances[0]
+        else:
+            return None
 
     def get_instance(self):
         """cached copy of get_resource_object()"""
@@ -214,10 +215,15 @@ class InstanceHelper(AWSHelper):
 
     def get_cname_target(self):
         """returns public_dns_name"""
+        boto_self = self.get_instance()
+
+        if boto_self is None:
+            return None
+
         if self.public:
-            return self.get_instance().public_dns_name
+            return boto_self.public_dns_name
         else:
-            return self.get_instance().private_ip_address
+            return boto_self.private_ip_address
 
     def get_basename(self):
         """returns a base name, usually a combination of role and environment"""
@@ -235,14 +241,14 @@ class InstanceHelper(AWSHelper):
     def get_dnsname(self):
         """returns a unique dns name based on get_name()/get_basename() including domain. Return None when no domain provided or other exception"""
         try:
-            return self.get_name() + self.heet.get_value('domain', required=True)
+            return self.get_name() + '.' + self.heet.get_value('domain', required=True)
         except:
             return None
 
     def get_index_dnsname(self):
         """returns a unique dns name based on instance get_basename() and index including domain. Return None when no domain provided or other exception"""
         try:
-            return "%s-%02d%s" % (self.get_basename(), self.index, self.heet.get_value('domain', required=True))
+            return "%s-%02d.%s" % (self.get_basename(), self.index, self.heet.get_value('domain', required=True))
         except:
             return None
 
