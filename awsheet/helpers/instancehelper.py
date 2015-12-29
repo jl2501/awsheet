@@ -18,13 +18,28 @@ import boto.ec2.elb
 import boto.cloudformation
 import boto.vpc
 
+class subnetCache(object):
+    '''cache whether or not a subnet is public or private'''
+    def __init__(self):
+        self.subnet_public = {'key' : 'value'}
+
+    def __getattr__(self, attr):
+        """delegate everything to the hash for the moment while this is being factored out of mainline"""
+        return getattr(self.subnet_public, attr )
+
+    def __setattr(self, attr, value):
+        """delegate everything to the hash for the moment while this is being factored out of InstanceHelper mainline"""
+        return setattr(self.subnet_public, attr, value)
+
+
+
+
 class InstanceHelper(AWSHelper):
-    "modular and convergent ec2 instances"
+    """Idempotently create instances"""
 
-    # cache whether or not a subnet is public or private
-    subnet_public = {'key' : 'value'}
+    #- keeps track of indexes for every subsequently created class accumulated per specific role name
+    #- during the object lifetime of the class object. (One execution of a module usually)
     role_counts = {}
-
 
     def __init__(self, heet, role, normalize_name=False, *args, **kwargs):
         print 'entered InstanceHelper __init__'
@@ -101,11 +116,11 @@ class InstanceHelper(AWSHelper):
         self.unique_tag = '%s/%s/v=%s/%s/%s/index=%s/%s' % (self.heet.base_name, self.environment, self.version, self.ami, self.instance_type, self.index, self.role)
 
 
-        #- Heet Protocol: 
+        #- Heet Protocol:
         # call post_init_hook before add_resource/converge
         self.post_init_hook()
 
-        #- Heet Protocol: 
+        #- Heet Protocol:
         #-  add_resource to the list of resources that the AWSHeet object is
         #-  responsible for calling back the converge methods of.
         heet.add_resource(self)
@@ -282,10 +297,14 @@ class InstanceHelper(AWSHelper):
         else:
             return self.get_instance().private_ip_address
 
+
+
     def get_basename(self):
         """returns a base name, usually a combination of role and environment"""
         str = '%s-%s' % (self.environment, self.role)
         return re.sub('[^A-z0-9\-]', '-', str)
+
+
 
     def get_name(self):
         """returns a unique host name, usually a combination of role and environment and something unique about the instance. When converging, an Name tag is created with this value"""
@@ -295,6 +314,8 @@ class InstanceHelper(AWSHelper):
             octets = '0.0.0.0'.split('.')
         return '%s-%s-%s-%s-%s' % (self.get_basename(), octets[0], octets[1], octets[2], octets[3])
 
+
+
     def get_dnsname(self):
         """returns a unique dns name based on get_name()/get_basename() including domain. Return None when no domain provided or other exception"""
         try:
@@ -302,12 +323,16 @@ class InstanceHelper(AWSHelper):
         except:
             return None
 
+
+
     def get_index_dnsname(self):
         """returns a unique dns name based on instance get_basename() and index including domain. Return None when no domain provided or other exception"""
         try:
             return "%s-%02d%s" % (self.get_basename(), self.index, self.heet.get_value('domain', required=True))
         except:
             return None
+
+
 
     def set_tag(self, key, value):
         """add tag to the instance. This operation is idempotent. Tags are automatically destroyed when instances are terminated"""
@@ -320,7 +345,6 @@ class InstanceHelper(AWSHelper):
                 return
             self.heet.logger.debug("setting tag %s=%s on instance %s" % (key, value, instance))
             instance.add_tag(key, value)
-
 
 
 
@@ -347,8 +371,6 @@ class InstanceHelper(AWSHelper):
 
 
 
-
-
     @classmethod
     def get_count_of_role(cls, role):
         """Return count of instances with this role. First invocation returns 1, second returns 2, etc."""
@@ -357,8 +379,16 @@ class InstanceHelper(AWSHelper):
         cls.role_counts[role] = current_count
         return current_count
 
+
+
     def supports_pv(self):
         """Return True when self.instance_type can boot from paravirtual EBS image (not HVM)
         http://aws.amazon.com/amazon-linux-ami/instance-type-matrix/"""
         return not re.search('^(i2|cc2|g2|cg1|r3|t2)\.', self.instance_type)
 
+
+
+
+
+
+#- EOF
