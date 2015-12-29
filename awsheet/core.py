@@ -9,15 +9,56 @@ import boto
 import boto.ec2
 import boto.ec2.elb
 import collections
+import boto.cloudformation
+import boto.vpc
+import boto.route53
+
+def parse_cli_args():
+    parser = argparse.ArgumentParser(description='create and destroy AWS resources idempotently')
+    parser.add_argument('-d', '--destroy', help='release the resources (terminate instances, delete stacks, etc)', action='store_true')
+    parser.add_argument('-e', '--environment', help='e.g. production, staging, testing, etc', default='testing')
+    parser.add_argument('-r', '--region', help='region name to connect to', default='us-east-1')
+    parser.add_argument('-v', '--version', help='create/destroy resources associated with a version to support '
+                                                'having multiple versions of resources running at the same time. '
+                                                'Some resources are not possibly able to support versions - '
+                                                'such as CNAMEs without a version string.')
+    #- TODO: to support this 'dry_run' feature request, we will add
+    #-     a wrapper library for all the boto stuff and import boto through that abstraction
+    #-     all the boto stuff that would write something will then be placed in a sub-layer of the
+    #-     overall boto abstraction that doesn't run in dry_run mode
+    #-     (when some lookupable way to access the value
+    #-     that is set here in some kind of "mode configuration" object says that we are in 'dry_run' mode.
+    #-      (configuration object in C would be bitmask of logical OR flags kind of data structure / an object with
+    #-      a bunch of bool-like attributes for each mode...))
+    #parser.add_argument('-n', '--dry-run', help='environment', action='store_true')
+    #self.args = parser.parse_args()
+    return parser.parse_args()
+
+
+
+def get_region():
+    cli_args = parse_cli_args()
+    return cli_args.region
+
+
 
 class AWSHeet:
 
     TAG = 'AWSHeet'
 
-    def __init__(self, defaults={}, name=None):
+    def __init__(self, defaults={}, name=None, region=None, args=None):
         self.defaults = defaults
         self.resources = []
-        self.parse_args()
+        if args is None:
+            self.args = parse_cli_args()
+        else:
+            self.args = args
+
+        if self.args.region and region is None:
+           self.region = self.args.region
+        else:
+            self.region = region
+
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
         handler = logging.StreamHandler(sys.stdout)
@@ -26,7 +67,6 @@ class AWSHeet:
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
         self.base_dir = os.path.dirname(os.path.realpath(sys.argv[0]))
-
 
         #- allow user to explicitly set project name
         default_base_name = os.path.basename(sys.argv[0]).split('.')[0]
@@ -37,12 +77,13 @@ class AWSHeet:
             self.logger.info('Using parameter-based name override: {}'.format(name))
             self.base_name = name
 
+
         self.load_creds()
 
         #- resource reference table - this is used to refer to other resources by '@name'
         self.resource_refs = dict()
 
-        #- If a resource needs some events to occur before it can fully converge then 
+        #- If a resource needs some events to occur before it can fully converge then
         #- it must converge in 2 phases.
         #- In the second phase the resource can assume the resource reference table is complete
 
@@ -50,7 +91,47 @@ class AWSHeet:
         #- Heet will register that resources converge_dependency() method to run at exit
         self.dependent_resources = dict()
 
+        #- if we are run in destroy mode, do everything except call converge() on the resources
+        #- in the resources list, then exit. At exit time, run this function.
         atexit.register(self._finalize)
+
+
+        #- All the AWS API service connection objects
+        self.aws_service_connections = self.create_aws_service_connections(region=self.get_region())
+        self.logger.info('AWS Region: {}'.format(self.get_region()))
+
+
+
+    def create_aws_service_connections(self, region):
+        '''Create a connection to all the services needed.
+        Helper objects reference these connection objects so that there is a single code path for contacting the AWS API
+        that all goes through this Heet object'''
+        service_connections = {region: {}}
+
+        service_connections[region]['route53'] = boto.route53.connect_to_region(region)
+        service_connections[region]['cloudformation'] = boto.cloudformation.connect_to_region(region, aws_access_key_id=self.access_key_id, aws_secret_access_key=self.secret_access_key)
+        service_connections[region]['ec2'] = boto.ec2.connect_to_region(region, aws_access_key_id=self.access_key_id, aws_secret_access_key=self.secret_access_key)
+        service_connections[region]['vpc'] = boto.vpc.connect_to_region(region, aws_access_key_id=self.access_key_id, aws_secret_access_key=self.secret_access_key)
+
+        return service_connections
+
+
+
+    def service_is_region_specific(self, service_name):
+        return (service_name in ['route53', 'ec2', 'vpc', 'cloudformation'])
+
+
+
+    def get_aws_service_connection(self, service_name, region=None):
+        '''return the aws api service connection obejct for the named service in the named region'''
+        if region is None:
+            region = self.get_region()
+
+        if self.service_is_region_specific(service_name):
+            service_c = self.aws_service_connections[region][service_name]
+        else:
+            service_c = self.aws_service_connections[service_name]
+        return service_c
 
 
 
@@ -60,8 +141,11 @@ class AWSHeet:
         user_boto_config = os.path.join(os.environ.get('HOME'), ".boto")
         self.parse_creds_from_file(user_boto_config)
 
-        self.access_key_id = os.getenv('AWS_ACCESS_KEY_ID', None)
-        self.secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY', None)
+
+        if os.getenv('AWS_ACCESS_KEY_ID', None) is not None:
+            self.access_key_id = os.getenv('AWS_ACCESS_KEY_ID', None)
+        if os.getenv('AWS_SECRET_ACCESS_KEY', None) is not None:
+            self.secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY', None)
 
         auth_file = os.path.join(self.base_dir, self.base_name + ".auth")
         self.parse_creds_from_file(auth_file)
@@ -128,17 +212,19 @@ class AWSHeet:
                     self.logger.error('Exception caught in converge phase of {} resource: {}'.format(res_x.__class__.__name__, str(err)) )
                     #- skip execution of registered atexit functions
                     os._exit(os.EX_SOFTWARE)
-    
-    
+
+
 
 
     def add_dependent_resource(self, dependent_resource, key_name):
         """Adds resources to a list and registers that resource's converge_dependency() method
         to be called at program exit and passes it the resource_name that it passed us.
+
         When a resource calls this, it can use they key_name as a tag, so that
         if a resource has multiple reasons to mark a resource as dependent, an association with each dependent
         event can be made. Each invocation of this method results in another call of the resources 'converge_dependency'
-        method at the time of program exit. 
+        method at the time of program exit.
+
         Callbacks and tags are issued at exit in LIFO order."""
         atexit.register(dependent_resource.converge_dependency, key_name)
         return
@@ -164,21 +250,9 @@ class AWSHeet:
 
 
 
-    def parse_args(self):
-        parser = argparse.ArgumentParser(description='create and destroy AWS resources idempotently')
-        parser.add_argument('-d', '--destroy', help='release the resources (terminate instances, delete stacks, etc)', action='store_true')
-        parser.add_argument('-e', '--environment', help='e.g. production, staging, testing, etc', default='testing')
-        parser.add_argument('-v', '--version', help='create/destroy resources associated with a version to support '
-                                                    'having multiple versions of resources running at the same time. '
-                                                    'Some resources are not possibly able to support versions - '
-                                                    'such as CNAMEs without a version string.')
-        #parser.add_argument('-n', '--dry-run', help='environment', action='store_true')
-        self.args = parser.parse_args()
-
-
-
     def get_region(self):
-        return self.get_value('region', default='us-east-1')
+        #return self.get_value('region', kwargs=args, default='us-east-1', required=True)
+        return self.region
 
     def get_project(self):
         return self.base_name
@@ -209,9 +283,23 @@ class AWSHeet:
 
 
     def exec_awscli(self, cmd):
-        env = os.environ.copy()
-        env['AWS_ACCESS_KEY_ID'] = self.access_key_id
-        env['AWS_SECRET_ACCESS_KEY'] = self.secret_access_key
+        init_env = os.environ.copy()
+        env = dict()
+
+        #- strip the environment of non utf-8 encodable characters or Popen will fail
+        for key_x, value_x in init_env.iteritems():
+            key_y = value_y = ''
+            try:
+                key_y = str(key_x).encode('utf-8', 'replace')
+                value_y = str(value_x).encode('utf-8', 'replace')
+            except UnicodeDecodeError as err:
+                print "removing environment setting {} from passed env due to Unicode Error.({})".format(key_x, value_x)
+                key_y = value_y = ''
+            env[key_y] = value_y
+
+        env['AWS_ACCESS_KEY_ID'] = self.access_key_id.encode('utf-8')
+        env['AWS_SECRET_ACCESS_KEY'] = self.secret_access_key.encode('utf-8')
+
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, env=env)
         return proc.communicate()[0]
 

@@ -96,21 +96,10 @@ class InstanceHelper(AWSHelper):
         #- if the user_data is a dict, json encode it. Else assume it is JSON-encoded already.
         self.user_data = json.dumps(user_data) if type(user_data) == dict else user_data
 
-        self.conn = boto.ec2.connect_to_region(
-            heet.get_region(),
-            aws_access_key_id=heet.access_key_id,
-            aws_secret_access_key=heet.secret_access_key)
+        self.conn = self.heet.get_aws_service_connection(service_name='ec2')
+        self.vpc_conn = self.heet.get_aws_service_connection(service_name='vpc')
 
-        self.vpc_conn = boto.vpc.connect_to_region(
-            heet.get_region(),
-            aws_access_key_id=heet.access_key_id,
-            aws_secret_access_key=heet.secret_access_key)
-
-
-        #- NBD: self.public == will this instance have a publicly-accessible IP address or not?
-        #self.public = heet.get_value('associate_public_ip_address', kwargs, default=self.is_subnet_public(self.subnet_id))
-        self.public = heet.get_value('associate_public_ip_address', kwargs, default=False)
-
+        self.public = heet.get_value('associate_public_ip_address', kwargs, default=self.is_subnet_public(self.subnet_id))
 
         # need unique way of identifying the instance based upon the inputs of this class (i.e. not the EC2 instance-id)
         self.unique_tag = '%s/%s/v=%s/%s/%s/index=%s/%s' % (self.heet.base_name, self.environment, self.version, self.ami, self.instance_type, self.index, self.role)
@@ -134,11 +123,12 @@ class InstanceHelper(AWSHelper):
 
     def get_resource_object(self):
         """return boto object for existing resource or None of doesn't exist. the response is not cached"""
-
-        for instance in self.conn.get_only_instances(filters={'tag:'+AWSHeet.TAG:self.unique_tag}):
-            if instance.state == 'pending' or instance.state == 'running':
-                return instance
-        return None
+        matching_instances = self.conn.get_only_instances(filters={'tag:'+AWSHeet.TAG:self.unique_tag})
+        if len(matching_instances) > 0:
+            #- TODO: log there was more than one match. This is unexpected.
+            return matching_instances[0]
+        else:
+            return None
 
 
 
@@ -292,10 +282,15 @@ class InstanceHelper(AWSHelper):
 
     def get_cname_target(self):
         """returns public_dns_name"""
+        boto_self = self.get_instance()
+
+        if boto_self is None:
+            return None
+
         if self.public:
-            return self.get_instance().public_dns_name
+            return boto_self.public_dns_name
         else:
-            return self.get_instance().private_ip_address
+            return boto_self.private_ip_address
 
 
 
@@ -319,7 +314,7 @@ class InstanceHelper(AWSHelper):
     def get_dnsname(self):
         """returns a unique dns name based on get_name()/get_basename() including domain. Return None when no domain provided or other exception"""
         try:
-            return self.get_name() + self.heet.get_value('domain', required=True)
+            return self.get_name() + '.' + self.heet.get_value('domain', required=True)
         except:
             return None
 
@@ -328,7 +323,7 @@ class InstanceHelper(AWSHelper):
     def get_index_dnsname(self):
         """returns a unique dns name based on instance get_basename() and index including domain. Return None when no domain provided or other exception"""
         try:
-            return "%s-%02d%s" % (self.get_basename(), self.index, self.heet.get_value('domain', required=True))
+            return "%s-%02d.%s" % (self.get_basename(), self.index, self.heet.get_value('domain', required=True))
         except:
             return None
 
