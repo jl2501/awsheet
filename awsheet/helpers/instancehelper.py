@@ -173,8 +173,11 @@ class InstanceHelper(AWSHelper):
         self.set_tag(AWSHeet.TAG, self.unique_tag)
         self.set_tag('Name', self.get_name())
         if self.get_dnsname():
+            #-FIXME: this is breaking on stopped instances
+            self.heet.logger.debug('NickNameHelper(self.heet, self.get_dnsname(), self)')
             NickNameHelper(self.heet, self.get_dnsname(), self)
         if self.get_index_dnsname():
+            self.heet.logger.debug('NickNameHelper(self.heet, self.get_index_dnsname(), self)')
             NickNameHelper(self.heet, self.get_index_dnsname(), self)
         # set the security groups in case they have changes since the instance was first created
         self.conn.modify_instance_attribute(self.get_instance().id, 'groupSet', self.security_groups)
@@ -205,13 +208,18 @@ class InstanceHelper(AWSHelper):
         return
 
 
-
     def get_cname_target(self):
         """returns public_dns_name"""
+        cname_target = None
         if self.public:
-            return self.get_instance().public_dns_name
+            cname_target = self.get_instance().public_dns_name
+            heet.logger.debug('instancehelper.get_cname_target returning: {}'.format(public_dns_name))
         else:
-            return self.get_instance().private_ip_address
+            cname_target = self.get_instance().private_ip_address
+
+        heet.logger.debug('instancehelper.get_cname_target returning: {}'.format(public_dns_name))
+        return cname_target
+
 
     def get_basename(self):
         """returns a base name, usually a combination of role and environment"""
