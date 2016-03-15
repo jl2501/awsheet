@@ -75,7 +75,7 @@ class InstanceHelper(AWSHelper):
     def get_resource_object(self):
         """return boto object for existing resource or None of doesn't exist. the response is not cached"""
         for instance in self.conn.get_only_instances(filters={'tag:'+AWSHeet.TAG:self.unique_tag}):
-            if instance.state == 'pending' or instance.state == 'running':
+            if instance.state in ['pending', 'running', 'stopped']:
                 return instance
         return None
 
