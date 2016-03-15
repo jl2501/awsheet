@@ -213,7 +213,7 @@ class InstanceHelper(AWSHelper):
         else:
             cname_target = self.get_instance().private_ip_address
 
-        self.heet.logger.debug('instancehelper.get_cname_target returning: {}'.format(cname_target))
+        #self.heet.logger.debug('instancehelper.get_cname_target returning: {}'.format(cname_target))
         return cname_target
 
 
