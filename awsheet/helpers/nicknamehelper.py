@@ -33,7 +33,12 @@ class NickNameHelper(AWSHelper):
     def converge(self):
         # if the target is a subclass of AWSHelper, execute the overloaded method to get the true target
         if isinstance(self.value, AWSHelper):
-            self.value = self.value.get_cname_target()
+            cname_target = self.value.get_cname_target()
+            #- may return None, in which case, we are done
+            if not cname_target:
+                return None
+            else:
+                self.value = cname_target
 
         current_record = self.get_resource_object()
 
