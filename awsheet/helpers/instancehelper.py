@@ -78,13 +78,18 @@ class InstanceHelper(AWSHelper):
     def __str__(self):
         return "Instance %s" % self.unique_tag
 
+
     def get_resource_object(self):
         """return boto object for existing resource or None of doesn't exist. the response is not cached"""
         matching_instances = self.conn.get_only_instances(filters={'tag:'+AWSHeet.TAG:self.unique_tag})
-        if len(matching_instances) > 0:
-            return matching_instances[0]
-        else:
-            return None
+
+		#- return the first instance in any of the named states
+        for instance in matching_instances:
+            if instance.state in ['pending', 'running', 'stopped']:
+                return instance
+
+        return None
+
 
     def get_instance(self):
         """cached copy of get_resource_object()"""
@@ -200,6 +205,7 @@ class InstanceHelper(AWSHelper):
         # TODO consider deleting all CNAMEs that point to public dns name
         instance = self.get_instance()
         if not instance:
+            self.heet.logger.debug('No resource object to destroy found.')
             return
         self.pre_destroy_hook()
         if self.get_dnsname():
