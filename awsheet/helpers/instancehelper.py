@@ -218,18 +218,17 @@ class InstanceHelper(AWSHelper):
         return
 
 
-
     def get_cname_target(self):
         """returns public_dns_name"""
-        boto_self = self.get_instance()
-
-        if boto_self is None:
-            return None
-
+        cname_target = None
         if self.public:
-            return boto_self.public_dns_name
+            cname_target = self.get_instance().public_dns_name
         else:
-            return boto_self.private_ip_address
+            cname_target = self.get_instance().private_ip_address
+
+        #self.heet.logger.debug('instancehelper.get_cname_target returning: {}'.format(cname_target))
+        return cname_target
+
 
     def get_basename(self):
         """returns a base name, usually a combination of role and environment"""

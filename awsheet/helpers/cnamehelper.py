@@ -14,6 +14,13 @@ import boto.ec2
 import boto.ec2.elb
 import boto.cloudformation
 
+
+#- Sleep this much time before hitting the DNS api
+#- As Zones grow and the requests take longer and longer,
+#- this helps make sure that we aren't going to get throttled
+#- by the API or have to implement retry logic at this time
+SELF_THROTTLE_TIME = 5.0
+
 class CNAMEHelper(AWSHelper):
     "modular and convergent route53 records"
 
@@ -71,10 +78,14 @@ class CNAMEHelper(AWSHelper):
             self.heet.logger.info("deleting old CNAME record %s to %s" % (self.name, current_value))
             self.zone.delete_cname(self.name)
         self.heet.logger.info("creating CNAME record %s to %s for ttl=%s" % (self.name, self.value, self.ttl))
-        changes = boto.route53.record.ResourceRecordSets(self.conn, self.zone_id)
-        change = changes.add_change("CREATE", self.name, "CNAME", self.ttl)
-        change.add_value(self.value)
-        result = changes.commit()
+        try:
+            time.sleep(SELF_THROTTLE_TIME)
+            changes = boto.route53.record.ResourceRecordSets(self.conn, self.zone_id)
+            change = changes.add_change("CREATE", self.name, "CNAME", self.ttl)
+            change.add_value(self.value)
+            result = changes.commit()
+        except boto.route53.exception.DNSServerError as err:
+            self.heet.logger.error('Error in CNAME converge: code:[{code}] message:[{message}] reason:[{reason}]'.format(code=err.error_code, message=err.message, reason=err.reason))
         return self
 
     def destroy(self):
