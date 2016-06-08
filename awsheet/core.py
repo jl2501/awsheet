@@ -20,10 +20,10 @@ def parse_cli_args():
     parser.add_argument('-r', '--region', help='region name to connect to', default='us-east-1')
     parser.add_argument('-c', '--converge-mode', help=('Allows you to have each resource ask you to converge it or skip it\n'
                                                        '    all (default mode): loop through the resources as added and call converge on each\n'
-                                                       '    ask: loop through the resources and ask if to call converge on each\n'
                                                        'destroy: alias for --destroy'
                                                        '    dry: dry run mode. Go through everything but do not call converge on any resources'), default='all')
 
+    parser.add_argument('--ask', help='Ask before converging or destroying each resource. Allows you to selectively skip resources', action='store_true')
 
     parser.add_argument('-v', '--version', help='create/destroy resources associated with a version to support '
                                                 'having multiple versions of resources running at the same time. '
@@ -246,49 +246,65 @@ class AWSHeet:
         """
         Run this function automatically atexit. If --destroy flag is use, destroy all resouces in reverse order
         """
+        #- Destroy Mode
         if self.args.converge_mode == 'destroy':
             sys.stdout.write("You have asked to destroy the following resources from [ %s / %s ]:\n\n" % (self.base_name, self.get_environment()))
             for resource in self.resources:
                 print " * %s" % resource
             sys.stdout.write("\nAre you sure? y/N: ")
             choice = raw_input().lower()
+
             if choice != 'y':
                 self.logger.warn("Abort - not destroying resources from [ %s / %s ] without affirmation" % (self.base_name, self.get_environment()))
                 exit(1)
-            for resource in reversed(self.resources):
-                resource.destroy()
-            self.logger.info("all AWS resources in [ %s / %s ] have had destroy() called" % (self.base_name, self.get_environment()))
 
+            for resource in reversed(self.resources):
+                if self.args.ask:
+                    sys.stdout.write("Destroy the following resource from [ %s / %s ]:\n\n" % (self.base_name, self.get_environment()))
+                    print " * %s" % resource
+                    sys.stdout.write("\nDestroy now? y/N: ")
+                    choice = raw_input().lower()
+                else:
+                    #- assume yes if not in ask mode
+                    choice = 'y'
+
+                if choice == 'y':
+                    resource.destroy()
+
+            self.logger.info("all AWS resources in [ %s / %s ] done." % (self.base_name, self.get_environment()))
+
+        #- Converge Mode
         elif self.args.converge_mode == 'all':
             #- default mode, just converge all the resources
             for resource_x in self.resources:
-                try:
-                    resource_x.converge()
-                except Exception as err:
-                    #- if there's an exception raised in the converge
-                    #- then we skip the other things registered to be called
-                    #- at exit time
-                    os._exit(os.EX_SOFTWARE)
+                if self.args.ask:
+                    sys.stdout.write("\nYou have asked to create the following resource in [ %s / %s ]:\n" % (self.base_name, self.get_environment()))
+                    print " * %s" % resource_x
+                    sys.stdout.write("\nAre you sure? y/N: ")
+                    choice = raw_input().lower()
+                else:
+                    #- default to yes if not in ask mode
+                    choice = 'y'
 
+                if choice == 'y':
+                    try:
+                        resource_x.converge()
+                    except Exception as err:
+                        #- if there's an exception raised in the converge
+                        #- then we skip the other things registered to be called
+                        #- at exit time
+                        os._exit(os.EX_SOFTWARE)
+                else:
+                    self.logger.warn("Skip - not creating this resource in [ %s / %s ] without affirmation\n" % (self.base_name, self.get_environment()))
+
+
+        #- Dry Run Mode
         elif self.args.converge_mode == 'dry':
             print "List of resources: "
             for resource_x in self.resources:
                 print str(resource_x)
 
             return None
-
-
-        elif self.args.converge_mode == 'ask':
-            for resource in self.resources:
-                sys.stdout.write("You have asked to create the following resource in [ %s / %s ]:\n" % (self.base_name, self.get_environment()))
-                print " * %s" % resource
-                sys.stdout.write("\nAre you sure? y/N: ")
-                choice = raw_input().lower()
-                if choice == 'y':
-                    resource.converge()
-                else:
-                    self.logger.warn("Skip - not creating this resource in [ %s / %s ] without affirmation\n" % (self.base_name, self.get_environment()))
-
 
 
 
