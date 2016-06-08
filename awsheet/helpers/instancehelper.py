@@ -52,20 +52,14 @@ class InstanceHelper(AWSHelper):
         self.security_groups.extend(self.base_security_groups)
         user_data = heet.get_value('user_data', kwargs)
         self.user_data = json.dumps(user_data) if type(user_data) == dict else user_data
-
-        self.conn = self.heet.get_aws_service_connection(service_name='ec2')
-        self.vpc_conn = self.heet.get_aws_service_connection(service_name='vpc')
-
-        #self.conn = boto.ec2.connect_to_region(
-        #    heet.get_region(),
-        #    aws_access_key_id=heet.access_key_id,
-        #    aws_secret_access_key=heet.secret_access_key)
-        #self.vpc_conn = boto.vpc.connect_to_region(
-        #    heet.get_region(),
-        #    aws_access_key_id=heet.access_key_id,
-        #    aws_secret_access_key=heet.secret_access_key)
-
-
+        self.conn = boto.ec2.connect_to_region(
+            heet.get_region(),
+            aws_access_key_id=heet.access_key_id,
+            aws_secret_access_key=heet.secret_access_key)
+        self.vpc_conn = boto.vpc.connect_to_region(
+            heet.get_region(),
+            aws_access_key_id=heet.access_key_id,
+            aws_secret_access_key=heet.secret_access_key)
         self.public = heet.get_value('associate_public_ip_address', kwargs, default=self.is_subnet_public(self.subnet_id))
 
         # need unique way of identifying the instance based upon the inputs of this class (i.e. not the EC2 instance-id)
@@ -82,7 +76,6 @@ class InstanceHelper(AWSHelper):
     def get_resource_object(self):
         """return boto object for existing resource or None of doesn't exist. the response is not cached"""
         matching_instances = self.conn.get_only_instances(filters={'tag:'+AWSHeet.TAG:self.unique_tag})
-
 		#- return the first instance in any of the named states
         for instance in matching_instances:
             if instance.state in ['pending', 'running', 'stopped']:
@@ -246,14 +239,14 @@ class InstanceHelper(AWSHelper):
     def get_dnsname(self):
         """returns a unique dns name based on get_name()/get_basename() including domain. Return None when no domain provided or other exception"""
         try:
-            return self.get_name() + '.' + self.heet.get_value('domain', required=True)
+            return self.get_name() + self.heet.get_value('domain', required=True)
         except:
             return None
 
     def get_index_dnsname(self):
         """returns a unique dns name based on instance get_basename() and index including domain. Return None when no domain provided or other exception"""
         try:
-            return "%s-%02d.%s" % (self.get_basename(), self.index, self.heet.get_value('domain', required=True))
+            return "%s-%02d%s" % (self.get_basename(), self.index, self.heet.get_value('domain', required=True))
         except:
             return None
 

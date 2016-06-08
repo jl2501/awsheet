@@ -8,4 +8,6 @@ from .helpers.instancehelper import InstanceHelper
 from .helpers.securitygrouphelper import SecurityGroupHelper
 from .helpers.securitygrouphelper import SecurityGroupRule
 from .helpers.volumehelper import VolumeHelper
+
+version = '3.0'
 from .regionallookuptable import RegionalLookupTable

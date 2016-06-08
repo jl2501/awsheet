@@ -18,6 +18,13 @@ def parse_cli_args():
     parser.add_argument('-d', '--destroy', help='release the resources (terminate instances, delete stacks, etc)', action='store_true')
     parser.add_argument('-e', '--environment', help='e.g. production, staging, testing, etc', default='testing')
     parser.add_argument('-r', '--region', help='region name to connect to', default='us-east-1')
+    parser.add_argument('-c', '--converge-mode', help=('Allows you to have each resource ask you to converge it or skip it\n'
+                                                       '    all (default mode): loop through the resources as added and call converge on each\n'
+                                                       'destroy: alias for --destroy'
+                                                       '    dry: dry run mode. Go through everything but do not call converge on any resources'), default='all')
+
+    parser.add_argument('--ask', help='Ask before converging or destroying each resource. Allows you to selectively skip resources', action='store_true')
+
     parser.add_argument('-v', '--version', help='create/destroy resources associated with a version to support '
                                                 'having multiple versions of resources running at the same time. '
                                                 'Some resources are not possibly able to support versions - '
@@ -32,7 +39,11 @@ def parse_cli_args():
     #-      a bunch of bool-like attributes for each mode...))
     #parser.add_argument('-n', '--dry-run', help='environment', action='store_true')
     #self.args = parser.parse_args()
-    return parser.parse_args()
+    parsed_args = parser.parse_args()
+    if parsed_args.destroy:
+        parsed_args.converge_mode = 'destroy'
+
+    return parsed_args
 
 
 
@@ -189,30 +200,41 @@ class AWSHeet:
     def add_resource(self, resource):
         """Adds resources to a list and calls that resource's converge method"""
         self.resources.append(resource)
-        if not self.args.destroy:
-            #- catch exceptions in the converge() cycle
-            #- to avoid calling the atexit functions
-            #- when we are exiting because of an error
-            try:
-                resource.converge()
-            except Exception as err:
-                self.logger.error('Exception caught in converge cycle: {}'.format(str(err)))
-                #- skip execution of registered atexit functions
-                os._exit(os.EX_SOFTWARE)
-
-
+        self.logger.info('{}: added resource: {}'.format(self.__class__.__name__, resource.__class__.__name__))
         return resource
+
+
+
+    def converge_all(self, mode='test'):
+        """Converges all the resources"""
+        if mode == 'test':
+            self.logger.info('In real mode, this will loop through the resources and call converge on each one. Returning having done nothing...')
+            return
+
+
+        else:
+            for res_x in self.resources:
+                #- catch exceptions in the converge() cycle
+                #- to avoid calling the atexit functions
+                #- when we are exiting because of an error
+                try:
+                    res_x.converge()
+                except Exception as err:
+                    self.logger.error('Exception caught in converge phase of {} resource: {}'.format(res_x.__class__.__name__, str(err)) )
+                    #- skip execution of registered atexit functions
+                    os._exit(os.EX_SOFTWARE)
+
 
 
 
     def add_dependent_resource(self, dependent_resource, key_name):
         """Adds resources to a list and registers that resource's converge_dependency() method
         to be called at program exit and passes it the resource_name that it passed us.
-        When a resource calls this, it also passes in a tag, used internally as a dict key, so that
-        if a resource makes multiple calls to this, they can associate a string with each dependent
-        event that they need to handle when the resource's converge_dependency() method is called back
-        self.dependent_resources[key_name] = dependent_resource
-        at program exit.
+
+        When a resource calls this, it can use they key_name as a tag, so that
+        if a resource has multiple reasons to mark a resource as dependent, an association with each dependent
+        event can be made. Each invocation of this method results in another call of the resources 'converge_dependency'
+        method at the time of program exit.
 
         Callbacks and tags are issued at exit in LIFO order."""
         atexit.register(dependent_resource.converge_dependency, key_name)
@@ -221,20 +243,68 @@ class AWSHeet:
 
 
     def _finalize(self):
-        """Run this function automatically atexit. If --destroy flag is use, destroy all resouces in reverse order"""
-        if not self.args.destroy:
-            return
-        sys.stdout.write("You have asked to destroy the following resources from [ %s / %s ]:\n\n" % (self.base_name, self.get_environment()))
-        for resource in self.resources:
-            print " * %s" % resource
-        sys.stdout.write("\nAre you sure? y/N: ")
-        choice = raw_input().lower()
-        if choice != 'y':
-            self.logger.warn("Abort - not destroying resources from [ %s / %s ] without affirmation" % (self.base_name, self.get_environment()))
-            exit(1)
-        for resource in reversed(self.resources):
-            resource.destroy()
-        self.logger.info("all AWS resources in [ %s / %s ] have had destroy() called" % (self.base_name, self.get_environment()))
+        """
+        Run this function automatically atexit. If --destroy flag is use, destroy all resouces in reverse order
+        """
+        #- Destroy Mode
+        if self.args.converge_mode == 'destroy':
+            sys.stdout.write("You have asked to destroy the following resources from [ %s / %s ]:\n\n" % (self.base_name, self.get_environment()))
+            for resource in self.resources:
+                print " * %s" % resource
+            sys.stdout.write("\nAre you sure? y/N: ")
+            choice = raw_input().lower()
+
+            if choice != 'y':
+                self.logger.warn("Abort - not destroying resources from [ %s / %s ] without affirmation" % (self.base_name, self.get_environment()))
+                exit(1)
+
+            for resource in reversed(self.resources):
+                if self.args.ask:
+                    sys.stdout.write("Destroy the following resource from [ %s / %s ]:\n\n" % (self.base_name, self.get_environment()))
+                    print " * %s" % resource
+                    sys.stdout.write("\nDestroy now? y/N: ")
+                    choice = raw_input().lower()
+                else:
+                    #- assume yes if not in ask mode
+                    choice = 'y'
+
+                if choice == 'y':
+                    resource.destroy()
+
+            self.logger.info("all AWS resources in [ %s / %s ] done." % (self.base_name, self.get_environment()))
+
+        #- Converge Mode
+        elif self.args.converge_mode == 'all':
+            #- default mode, just converge all the resources
+            for resource_x in self.resources:
+                if self.args.ask:
+                    sys.stdout.write("\nYou have asked to create the following resource in [ %s / %s ]:\n" % (self.base_name, self.get_environment()))
+                    print " * %s" % resource_x
+                    sys.stdout.write("\nAre you sure? y/N: ")
+                    choice = raw_input().lower()
+                else:
+                    #- default to yes if not in ask mode
+                    choice = 'y'
+
+                if choice == 'y':
+                    try:
+                        resource_x.converge()
+                    except Exception as err:
+                        #- if there's an exception raised in the converge
+                        #- then we skip the other things registered to be called
+                        #- at exit time
+                        os._exit(os.EX_SOFTWARE)
+                else:
+                    self.logger.warn("Skip - not creating this resource in [ %s / %s ] without affirmation\n" % (self.base_name, self.get_environment()))
+
+
+        #- Dry Run Mode
+        elif self.args.converge_mode == 'dry':
+            print "List of resources: "
+            for resource_x in self.resources:
+                print str(resource_x)
+
+            return None
 
 
 
