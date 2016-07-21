@@ -150,7 +150,7 @@ class SecurityGroupHelper(AWSHelper):
 
 
     def __str__(self):
-        return "SecurityGroup %s" % self.aws_name
+        return "SecurityGroup: {} ({})".format(self.aws_name, self.aws_id)
 
 
 
