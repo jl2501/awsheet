@@ -201,6 +201,8 @@ class AWSHeet:
         """Adds resources to a list and calls that resource's converge method"""
         self.resources.append(resource)
         self.logger.info('{}: added resource: {}'.format(self.__class__.__name__, resource.__class__.__name__))
+        self.logger.info('{}: converging resource: {}'.format(self.__class__.__name__, resource.__class__.__name__))
+        self.converge_resource(resource)
         return resource
 
 
@@ -242,6 +244,40 @@ class AWSHeet:
 
 
 
+    def converge_resource(self, resource):
+        if self.args.converge_mode == 'all':
+            #- default mode, just converge all the resources
+            if self.args.ask:
+                sys.stdout.write("\nYou have asked to create the following resource in [ %s / %s ]:\n" % (self.base_name, self.get_environment()))
+                print " * %s" % resource
+                sys.stdout.write("\nAre you sure? y/N: ")
+                choice = raw_input().lower()
+            else:
+                #- default to yes if not in ask mode
+                choice = 'y'
+
+            if choice == 'y':
+                try:
+                        resource.converge()
+                except Exception as err:
+                    #- if there's an exception raised in the converge
+                    #- then we skip the other things registered to be called
+                    #- at exit time
+                    self.logger.error("Exception in converge cycle. Unable to converge resource named [{}] in [ {} / {} ]\n".format(str(resource), self.base_name, self.get_environment()))
+                    self.logger.error(str(err))
+                    os._exit(os.EX_SOFTWARE)
+            else:
+                self.logger.warn("Skip - not creating this resource in [ %s / %s ] without affirmation\n" % (self.base_name, self.get_environment()))
+
+
+        #- Dry Run Mode
+        elif self.args.converge_mode == 'dry':
+            print str(resource)
+            return None
+
+
+
+
     def _finalize(self):
         """
         Run this function automatically atexit. If --destroy flag is use, destroy all resouces in reverse order
@@ -272,43 +308,6 @@ class AWSHeet:
                     resource.destroy()
 
             self.logger.info("all AWS resources in [ %s / %s ] done." % (self.base_name, self.get_environment()))
-
-        #- Converge Mode
-        elif self.args.converge_mode == 'all':
-            #- default mode, just converge all the resources
-            for resource_x in self.resources:
-                if self.args.ask:
-                    sys.stdout.write("\nYou have asked to create the following resource in [ %s / %s ]:\n" % (self.base_name, self.get_environment()))
-                    print " * %s" % resource_x
-                    sys.stdout.write("\nAre you sure? y/N: ")
-                    choice = raw_input().lower()
-                else:
-                    #- default to yes if not in ask mode
-                    choice = 'y'
-
-                if choice == 'y':
-                    try:
-                        resource_x.converge()
-                    except Exception as err:
-                        #- if there's an exception raised in the converge
-                        #- then we skip the other things registered to be called
-                        #- at exit time
-                        self.logger.error("Exception in converge cycle. Unable to converge resource named [{}] in [ {} / {} ]\n".format(str(resource_x), self.base_name, self.get_environment()))
-                        self.logger.error(str(err))
-                        os._exit(os.EX_SOFTWARE)
-                else:
-                    self.logger.warn("Skip - not creating this resource in [ %s / %s ] without affirmation\n" % (self.base_name, self.get_environment()))
-
-
-        #- Dry Run Mode
-        elif self.args.converge_mode == 'dry':
-            print "List of resources: "
-            for resource_x in self.resources:
-                print str(resource_x)
-
-            return None
-
-
 
     def get_region(self):
         #return self.get_value('region', kwargs=args, default='us-east-1', required=True)
