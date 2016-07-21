@@ -293,6 +293,8 @@ class AWSHeet:
                         #- if there's an exception raised in the converge
                         #- then we skip the other things registered to be called
                         #- at exit time
+                        self.logger.error("Exception in converge cycle. Unable to converge resource named [{}] in [ {} / {} ]\n".format(str(resource_x), self.base_name, self.get_environment()))
+                        self.logger.error(str(err))
                         os._exit(os.EX_SOFTWARE)
                 else:
                     self.logger.warn("Skip - not creating this resource in [ %s / %s ] without affirmation\n" % (self.base_name, self.get_environment()))
