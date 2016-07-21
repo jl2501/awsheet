@@ -50,6 +50,7 @@ class InstanceHelper(AWSHelper):
         self.base_security_groups = heet.get_value('base_security_groups', default=[])
         self.security_groups = heet.get_value('security_groups', kwargs, default=[])
         self.security_groups.extend(self.base_security_groups)
+        heet.logger.debug('Full Security Groups List: {}'.format(str(self.security_groups)))
         user_data = heet.get_value('user_data', kwargs)
         self.user_data = json.dumps(user_data) if type(user_data) == dict else user_data
 
