@@ -1,6 +1,9 @@
 from .awshelper import AWSHelper
 import boto
 import re
+import time
+
+DNS_SLEEP_TIME = 5.0
 
 class NickNameHelper(AWSHelper):
     """modular and convergent route53 "nickname" records (CNAME for public ip. A for private ip)"""
@@ -53,6 +56,7 @@ class NickNameHelper(AWSHelper):
                 return self
             # if record already exists AND points at wrong value, delete it before creating new record
             self.heet.logger.info("deleting old record %s to %s" % (self.name, current_value))
+            time.sleep(DNS_SLEEP_TIME)
             self.zone.delete_record(current_record)
 
         # If the target is an IP address, we must create an A
@@ -63,6 +67,7 @@ class NickNameHelper(AWSHelper):
         changes = boto.route53.record.ResourceRecordSets(self.conn, self.zone_id)
         change = changes.add_change("CREATE", self.name, self.type, self.ttl)
         change.add_value(self.value)
+        time.sleep(DNS_SLEEP_TIME)
         result = changes.commit()
         return self
 
@@ -71,4 +76,5 @@ class NickNameHelper(AWSHelper):
         if not current_record:
             return
         self.heet.logger.info("deleting record %s %s" % (self.name, current_record))
+        time.sleep(DNS_SLEEP_TIME)
         self.zone.delete_record(current_record)
