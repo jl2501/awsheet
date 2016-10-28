@@ -224,7 +224,7 @@ class SecurityGroupHelper(AWSHelper):
                 if err.code == 'InvalidGroup.NotFound':
                     self.heet.logger.debug('get_or_create_resource: setting ID tag failed. Waiting to try again...')
                     time.sleep(3)
-                    boto_self.add_tag(key=tag_name, value=tag_value)
+                    boto_group.add_tag(key=tag_name, value=tag_value)
                 else:
                     raise err
 
@@ -537,6 +537,7 @@ class SecurityGroupHelper(AWSHelper):
             self.heet.logger.debug("Using pre-existing group: %s" % self.aws_name)
             self.aws_id = boto_self.id
             remote_rules = set(self.normalize_aws_sg_rules(boto_self))
+            self.heet.logger.debug('Remote Object rules: {}'.format(str(remote_rules)))
 
         self.src_group_references['self'] = boto_self
         self.src_group_references[boto_self.id] = boto_self
