@@ -35,6 +35,8 @@ class CloudFormationHelper(AWSHelper):
             aws_access_key_id=heet.access_key_id,
             aws_secret_access_key=heet.secret_access_key)
         self.ignore_event = {}
+        self.capabilities = None
+
         heet.add_resource(self)
 
     def __str__(self):
@@ -93,11 +95,13 @@ class CloudFormationHelper(AWSHelper):
 
     def create(self):
         self.heet.logger.info("creating CloudFormation stack '%s'" % self.stack_name())
+        if self.needs_iam_capabilities():
+            self.add_capability('CAPABILITY_IAM')
         self.conn.create_stack(
             self.stack_name(),
             template_body=self.template,
             parameters=self.parameters,
-            capabilities=['CAPABILITY_IAM'])
+            capabilities=self.capabilities)
 
     def update(self):
         f = tempfile.NamedTemporaryFile(delete=False)
@@ -118,11 +122,29 @@ class CloudFormationHelper(AWSHelper):
 
         try:
             self.heet.logger.info("updating CloudFormation stack '%s'" % self.stack_name())
-            self.conn.update_stack(self.stack_name(), template_body=self.template, parameters=self.parameters)
+            if self.needs_iam_capabilities():
+                self.add_capability('CAPABILITY_IAM')
+            self.conn.update_stack(self.stack_name(), template_body=self.template, parameters=self.parameters, capabilities=self.capabilities)
         except boto.exception.BotoServerError as e:
-            #self.heet.logger.debug("unable to update - maybe no change of '%s'" % self.stack_name())
+            self.heet.logger.debug("unable to update CF stack [%s]" % self.stack_name())
+            if e.code == 'ValidationError' and e.message == 'No updates are to be performed.':
+                 self.heet.logger.debug('Ignoring failed update operation as there were no updates to perform. Continuing...')
+                 return
+            else:
+                #- exit immediately on all other errors
+                self.heet.logger.error('Failed to update CF Stack: error code:[{}] error_message: [{}]'.format( str(e.code), str(e.message)))
+                exit(-1)
+            #print '--- debug ---'
+            #print '   template_body   '
+            #print self.template
+            #print '--- /template_body ---'
             # noop update results in 400
             return
+
+    def needs_iam_capabilities(self):
+        '''determine if the stack modification operations need to specify IAM capabilities'''
+        #- for now, always assume we need this until we add a real way to test this
+        return True
 
     def create_or_update(self):
         self.conn.validate_template(self.template)
@@ -193,3 +215,22 @@ class CloudFormationHelper(AWSHelper):
         self.conn.delete_stack(self.stack_name())
         self.wait_for_complete()
 
+
+    def add_capability(self, capability):
+        '''adds the capabilty to the list of capabilities.
+        this is needed when stacks are nested or contain an IAM role.
+        see: https://forums.aws.amazon.com/thread.jspa?messageID=591290
+             http://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_UpdateStack.html
+             http://serverfault.com/questions/551530/aws-cloud-formation-requires-capabilities-capability-iam-child-stack
+        '''
+        if capability not in ['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM']:
+            self.heet.logger.error('Unrecognized capability [{}] can not be added to CF stack [{}]. Exiting...'.format(capability, self.name))
+            exit(-1)
+
+        if not self.capabilities:
+            self.capabilities = list()
+
+        if capability not in self.capabilities:
+            self.capabilities.append(capability)
+
+        return
