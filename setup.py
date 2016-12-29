@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import os
 from setuptools import setup
 
@@ -10,7 +12,7 @@ def read(fname):
 
 setup(
     name = "awsheet",
-    version = "0.0.8",
+    version = "0.0.9",
     author = "Mike Adler",
     author_email = "adler@stuntbeard.com",
     description = ("build repeatable stacks of AWS resources across prod and dev"),
